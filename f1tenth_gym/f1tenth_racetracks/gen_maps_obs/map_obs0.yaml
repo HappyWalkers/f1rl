@@ -1,0 +1,7 @@
+image: map_obs0.png
+resolution: 0.5 
+origin: [-278.1580663394779,-187.78818227634503, 0.000000]
+origin_pix: [-556.3161326789558,-375.57636455269005, 0.000000]
+negate: 0
+occupied_thresh: 0.45
+free_thresh: 0.196
