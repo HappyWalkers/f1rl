@@ -43,12 +43,11 @@ def test_env(env):
     gap_follower = Gap_follower()
 
     for ep_i in range(20):
-        obs, _ = env.reset()
+        obs = env.reset()
         done = False
-        truncated = False
         i = 0
         min_obs = []
-        while not (done or truncated):
+        while not (done):
             i += 1
             env.render()
             steer = 0
@@ -56,7 +55,7 @@ def test_env(env):
             ##### use policy ######
             # breakpoint()
             action, metric = gap_follower.planning(obs)
-            obs, step_reward, done, truncated, info = env.step(action)
+            obs, step_reward, done, info = env.step(action)
         print('finish one episode')
 
 
@@ -100,8 +99,8 @@ def main(argv):
     # plt.title("Flipped Map with Track Waypoints")
     # plt.show()
     
-    # # test env
-    # test_env(env)
+    # test env
+    test_env(env)
 
     # train
     # sk.rl.train(env)

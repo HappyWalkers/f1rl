@@ -46,7 +46,7 @@ class F110GymWrapper(gym.Env):
         starting_idx = random.sample(range(len(self.waypoints)), 1)
         x, y = self.waypoints[starting_idx][0, 1], self.waypoints[starting_idx][0, 2]
         theta_noise = (2*random.random() - 1) * 0.1
-        theta = self.waypoints[starting_idx][0, 2] + theta_noise
+        theta = self.waypoints[starting_idx][0, 3] + theta_noise
         starting_pos = np.array([[x, y, theta]])
         return starting_pos
 
@@ -70,7 +70,7 @@ class F110GymWrapper(gym.Env):
         linear_velocity_reward = abs(linear_velocity) - 1
         collision_punishment = -1 if collision else 0
         angular_velocity_punishment = - abs(angular_velocity)
-        reward = progress_reward * 0 + safety_distance_reward * 0 + linear_velocity_reward * 1 + collision_punishment * 100 + angular_velocity_punishment * 0 
+        reward = progress_reward * 100 + safety_distance_reward * 1 + linear_velocity_reward * 1 + collision_punishment * 100 + angular_velocity_punishment * 0 
         
         logging.info(f"step: {self.current_step}")
         logging.info(f"linear velocity: {linear_velocity}")
