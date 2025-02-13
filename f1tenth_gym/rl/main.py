@@ -99,8 +99,8 @@ def main(argv):
     # plt.title("Flipped Map with Track Waypoints")
     # plt.show()
     
-    # test env
-    test_env(env)
+    # # test env
+    # test_env(env)
 
     # train
     # sk.rl.train(env)
