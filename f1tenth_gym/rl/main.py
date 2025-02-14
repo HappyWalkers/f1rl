@@ -92,10 +92,15 @@ def main(argv):
     # # check waypoints
     # map_path = config.map_dir + map_info[config.map_ind][1].split('.')[0] + '.png'
     # with Image.open(map_path) as img:
-    #     flipped_img = img.transpose(Image.FLIP_LEFT_RIGHT)
+    #     img = img.transpose(Image.FLIP_TOP_BOTTOM)
     # plt.figure(figsize=(8, 6))
-    # plt.imshow(flipped_img)
-    # plt.plot(track.waypoints[:, 1], track.waypoints[:, 2], 'r')
+    # plt.imshow(img)
+    # for waypoint in track.waypoints:
+    #     if waypoint[3] > 0:
+    #         color = 'b'
+    #     else:
+    #         color = 'r'
+    #     plt.plot(waypoint[1] * 20, waypoint[2] * 20, color + 'o', markersize=abs(waypoint[3]))
     # plt.title("Flipped Map with Track Waypoints")
     # plt.show()
     

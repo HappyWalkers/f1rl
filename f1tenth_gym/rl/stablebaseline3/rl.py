@@ -99,14 +99,14 @@ def create_sac(env, seed):
 
 def train(env, seed):
     # Create PPO model
-    # model = create_ppo(env, seed)
+    model = create_ppo(env, seed)
     # model = create_ddpg(env, seed)
     # model = create_td3(env, seed)
-    model = create_sac(env, seed)
+    # model = create_sac(env, seed)
 
     # Train
     model.learn(
-        total_timesteps=10_000_000,
+        total_timesteps=30_000_000,
         log_interval=1,
         tb_log_name="PPO",
         reset_num_timesteps=True,
