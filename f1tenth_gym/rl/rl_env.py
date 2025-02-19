@@ -65,9 +65,8 @@ class F110GymWrapper(gym.Env):
         collision = obs["collisions"][0] or (abs(frenet_lateral_offset) > 0.5)
         angular_velocity = obs["ang_vels_z"][0]
         lap_counts = obs['lap_counts'][0]
-        if (lap_counts > self.last_lap_counts) or \
-            (self.last_frenet_arc_length is not None and frenet_arc_length - self.last_frenet_arc_length < -10):
-            self.last_frenet_arc_length = 0
+        if (self.last_frenet_arc_length is not None and frenet_arc_length - self.last_frenet_arc_length < -10):
+            self.last_frenet_arc_length = None
             
         # reward
         progress_reward = frenet_arc_length - self.last_frenet_arc_length if self.last_frenet_arc_length is not None else 0
@@ -75,7 +74,7 @@ class F110GymWrapper(gym.Env):
         linear_velocity_reward = abs(linear_velocity) - 1
         collision_punishment = -1 if collision else 0
         angular_velocity_punishment = - abs(angular_velocity)
-        reward = progress_reward * 100 + safety_distance_reward * 1 + linear_velocity_reward * 1 + collision_punishment * 1000 + angular_velocity_punishment * 0 
+        reward = progress_reward * 10 + safety_distance_reward * 1 + linear_velocity_reward * 1 + collision_punishment * 1000 + angular_velocity_punishment * 0 
         
         logging.info(f"step: {self.current_step}")
         logging.info(f"linear velocity: {linear_velocity}")
