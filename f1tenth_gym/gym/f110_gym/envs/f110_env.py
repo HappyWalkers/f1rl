@@ -442,7 +442,7 @@ class F110Env(gym.Env):
 
         if initial_states.shape[1] == 3:  # to support legacy code
             temp_states = np.zeros((initial_states.shape[0], 7))
-            temp_states[:, [0, 1, 2]] = initial_states  # keep first three states
+            temp_states[:, [0, 1, 4]] = initial_states  # keep first three states
             initial_states = temp_states  # fill rest with zeros
 
         # reset counters and data members

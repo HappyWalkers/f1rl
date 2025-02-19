@@ -30,10 +30,11 @@ class F110GymWrapper(gym.Env):
         self.action_space = spaces.Box(
             low=np.array([-0.4189, 1]), high=np.array([0.4189, 20]), shape=(2,), dtype=np.float32
         )
-        self._max_episode_steps = 2000
+        self._max_episode_steps = 10000
         self.current_step = 0
         self.waypoints = waypoints
         self.last_frenet_arc_length = None
+        self.last_lap_counts = 0
 
     def reset(self, seed=None, options=None):
         poses = self.get_reset_pose()
@@ -63,14 +64,18 @@ class F110GymWrapper(gym.Env):
         frenet_lateral_offset = obs["state_frenet"][0][1]
         collision = obs["collisions"][0] or (abs(frenet_lateral_offset) > 0.5)
         angular_velocity = obs["ang_vels_z"][0]
+        lap_counts = obs['lap_counts'][0]
+        if (lap_counts > self.last_lap_counts) or \
+            (self.last_frenet_arc_length is not None and frenet_arc_length - self.last_frenet_arc_length < -10):
+            self.last_frenet_arc_length = 0
             
         # reward
-        progress_reward = frenet_arc_length - self.last_frenet_arc_length if self.last_frenet_arc_length is not None else 0; self.last_frenet_arc_length = frenet_arc_length
+        progress_reward = frenet_arc_length - self.last_frenet_arc_length if self.last_frenet_arc_length is not None else 0
         safety_distance_reward = 0.5 - abs(frenet_lateral_offset)
         linear_velocity_reward = abs(linear_velocity) - 1
         collision_punishment = -1 if collision else 0
         angular_velocity_punishment = - abs(angular_velocity)
-        reward = progress_reward * 10 + safety_distance_reward * 1 + linear_velocity_reward * 1 + collision_punishment * 100 + angular_velocity_punishment * 0 
+        reward = progress_reward * 100 + safety_distance_reward * 1 + linear_velocity_reward * 1 + collision_punishment * 1000 + angular_velocity_punishment * 0 
         
         logging.info(f"step: {self.current_step}")
         logging.info(f"linear velocity: {linear_velocity}")
@@ -86,6 +91,10 @@ class F110GymWrapper(gym.Env):
         logging.info(f"collision punishment: {collision_punishment}")
         logging.info(f"angular velocity punishment: {angular_velocity_punishment}")
         logging.info(f"reward: {reward}")
+        
+        self.last_frenet_arc_length = frenet_arc_length
+        self.last_lap_counts = lap_counts
+        
         return np.concatenate((obs['state'][0][:5], obs['scans'][0])), float(reward), done or truncated or collision, info
 
     def render(self):

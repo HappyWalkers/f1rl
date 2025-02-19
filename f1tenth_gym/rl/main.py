@@ -96,11 +96,8 @@ def main(argv):
     # plt.figure(figsize=(8, 6))
     # plt.imshow(img)
     # for waypoint in track.waypoints:
-    #     if waypoint[3] > 0:
-    #         color = 'b'
-    #     else:
-    #         color = 'r'
-    #     plt.plot(waypoint[1] * 20, waypoint[2] * 20, color + 'o', markersize=abs(waypoint[3]))
+    #     color = plt.cm.viridis(waypoint[3])  # Normalize and map to colormap
+    #     plt.plot(waypoint[1] * 20, waypoint[2] * 20, 'o', color=color, markersize=abs(waypoint[3]))
     # plt.title("Flipped Map with Track Waypoints")
     # plt.show()
     
