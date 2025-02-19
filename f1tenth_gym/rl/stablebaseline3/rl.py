@@ -74,7 +74,7 @@ def create_sac(env, seed):
         batch_size=512,
         tau=0.005,
         gamma=0.99,
-        train_freq=(1, "episode"),
+        train_freq=(512, "step"),
         gradient_steps=1,
         action_noise=None,
         replay_buffer_class=None,
@@ -97,12 +97,12 @@ def create_sac(env, seed):
     )
     return model
 
-def train(env, seed):
+def train(vec_env, single_env, seed):
     # Create PPO model
     # model = create_ppo(env, seed)
     # model = create_ddpg(env, seed)
     # model = create_td3(env, seed)
-    model = create_sac(env, seed)
+    model = create_sac(vec_env, seed)
 
     # Train
     model.learn(
@@ -114,14 +114,14 @@ def train(env, seed):
     )
     
     # Evaluate or run an infinite loop to visualize the learned policy
-    obs = env.reset()
+    obs = single_env.reset()
     terminated = False
     while True:
-        env.render()
+        single_env.render()
         action, _states = model.predict(obs, deterministic=True)
         logging.info(f"action: {action}")
-        obs, reward, terminated, info = env.step(action)
+        obs, reward, terminated, info = single_env.step(action)
         if terminated:
-            obs = env.reset()
+            obs = single_env.reset()
             terminated = False
             print("Episode finished. Resetting...")

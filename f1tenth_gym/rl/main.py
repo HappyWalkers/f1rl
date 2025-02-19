@@ -26,6 +26,9 @@ from utils.Track import Track
 from utils import utils
 from matplotlib import pyplot as plt
 from PIL import Image
+from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
+from stable_baselines3.common.monitor import Monitor
+
 
 FLAGS = flags.FLAGS
 
@@ -34,6 +37,7 @@ flags.DEFINE_integer("map_index", 63, "Index of the map to use")
 flags.DEFINE_string("waypoints_path", "f1tenth_gym/rl/levine_block_wp.csv", "Path to waypoints file")
 flags.DEFINE_integer("num_agents", 1, "Number of agents")
 flags.DEFINE_string("logging_level", "INFO", "Logging level")
+flags.DEFINE_integer("num_envs", 24, "Number of environments to run in parallel")
 
 
 os.environ['F110GYM_PLOT_SCALE'] = str(60.)
@@ -57,6 +61,25 @@ def test_env(env):
             action, metric = gap_follower.planning(obs)
             obs, step_reward, done, info = env.step(action)
         print('finish one episode')
+        
+
+def make_env(waypoints, map_path, num_agents, base_seed, rank):
+    """
+    Returns a function that, when called, creates a fresh F110GymWrapper 
+    with a unique seed for each environment.
+    """
+    def _init():
+        env_seed = base_seed + rank  # ensure each env has a different seed
+        set_random_seed(env_seed)
+        env = F110GymWrapper(
+            waypoints=waypoints,
+            seed=env_seed,
+            map_path=map_path,
+            num_agents=num_agents
+        )
+        env = Monitor(env)
+        return env
+    return _init
 
 
 def main(argv):
@@ -82,7 +105,7 @@ def main(argv):
     track, config = Track.load_map(config.map_dir, map_info, config.map_ind, config, scale=config.map_scale, downsample_step=1)
 
     # Create the environment wrapper
-    env = F110GymWrapper(
+    single_env = F110GymWrapper(
         waypoints=track.waypoints,
         seed=FLAGS.seed,         
         map_path=config.map_dir + map_info[config.map_ind][1].split('.')[0],    
@@ -106,7 +129,24 @@ def main(argv):
 
     # train
     # sk.rl.train(env)
-    stablebaseline3.rl.train(env, seed=FLAGS.seed)
+    # Create a list of environment functions
+    # Each one will initialize an F110GymWrapper with a unique seed
+    env_fns = [
+        make_env(
+            waypoints=track.waypoints, 
+            map_path=config.map_dir + map_info[config.map_ind][1].split('.')[0],
+            num_agents=FLAGS.num_agents,
+            base_seed=FLAGS.seed,
+            rank=i
+        )
+        for i in range(FLAGS.num_envs)
+    ]
+
+    # Wrap them in a SubprocVecEnv (parallel) or DummyVecEnv (single-process)
+    vec_env = SubprocVecEnv(env_fns)
+
+    # Now call the training function, but pass the vectorized env
+    stablebaseline3.rl.train(vec_env, single_env=single_env, seed=FLAGS.seed)
 
 
 if __name__ == "__main__":
