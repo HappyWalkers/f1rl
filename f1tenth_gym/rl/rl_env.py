@@ -74,7 +74,7 @@ class F110GymWrapper(gym.Env):
         linear_velocity_reward = abs(linear_velocity) - 1
         collision_punishment = -1 if collision else 0
         angular_velocity_punishment = - abs(angular_velocity)
-        reward = progress_reward * 0 + safety_distance_reward * 1 + linear_velocity_reward * 1 + collision_punishment * 1000 + angular_velocity_punishment * 0 
+        reward = progress_reward * 10 + safety_distance_reward * 1 + linear_velocity_reward * 1 + collision_punishment * 1000 + angular_velocity_punishment * 0 
         
         logging.info(f"step: {self.current_step}")
         logging.info(f"linear velocity: {linear_velocity}")

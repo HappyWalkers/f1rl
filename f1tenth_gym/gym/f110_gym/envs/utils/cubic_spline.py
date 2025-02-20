@@ -361,7 +361,7 @@ class CubicSplineND:
             # yaw = (jnp.arctan2(sin, cos) + 2 * jnp.pi) % (2 * jnp.pi) # Get yaw from cos,sin and convert to [0, 2pi]
             return yaw
         
-    def calc_arclength(self, x: float, y: float, s_guess=0.0) -> tuple[float, float]:
+    def calc_arclength(self, x: float, y: float, s_guess=0.0):
         """
         Fast calculation of arclength for a given point (x, y) on the trajectory.
         Less accuarate and less smooth than calc_arclength but much faster.
@@ -393,7 +393,7 @@ class CubicSplineND:
         return s, ey
     
     @partial(jax.jit, static_argnums=(0))
-    def calc_arclength_jax(self, x: float, y: float, s_guess=0.0) -> tuple[float, float]:
+    def calc_arclength_jax(self, x: float, y: float, s_guess=0.0):
         ey, t, min_dist_segment = nearest_point_on_trajectory_jax(
             jnp.array([x, y]), self.points_jax[:, :2]
         )
@@ -403,7 +403,7 @@ class CubicSplineND:
 
     def calc_arclength_slow(
         self, x: float, y: float, s_guess: float = 0.0
-    ) -> tuple[float, float]:
+    ):
         """
         Calculate arclength for a given point (x, y) on the trajectory.
 
