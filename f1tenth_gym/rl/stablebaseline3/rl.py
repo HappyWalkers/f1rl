@@ -1,5 +1,6 @@
 from stable_baselines3 import PPO, DDPG, DQN, TD3, SAC
 from absl import logging
+from stable_baselines3.common.callbacks import EvalCallback
 
 
 def create_ppo(env, seed):
@@ -98,28 +99,37 @@ def create_sac(env, seed):
     return model
 
 def train(env, seed):
-    # Create PPO model
     # model = create_ppo(env, seed)
     # model = create_ddpg(env, seed)
     # model = create_td3(env, seed)
     model = create_sac(env, seed)
 
-    # Train
+    eval_callback = EvalCallback(
+        env,
+        best_model_save_path="./logs/best_model",
+        log_path="./logs/results",
+        eval_freq=10000,
+        n_eval_episodes=5,
+        deterministic=True,
+        render=False
+    )
+
     model.learn(
         total_timesteps=10_000_000,
         log_interval=1,
         tb_log_name="PPO",
         reset_num_timesteps=True,
-        progress_bar=False
+        progress_bar=False,
+        callback=eval_callback
     )
-    
-    # Evaluate or run an infinite loop to visualize the learned policy
+
+    best_model = SAC.load("./logs/best_model/best_model.zip")
+
     obs = env.reset()
     terminated = False
     while True:
         env.render()
-        action, _states = model.predict(obs, deterministic=True)
-        logging.info(f"action: {action}")
+        action, _states = best_model.predict(obs, deterministic=True)
         obs, reward, terminated, info = env.step(action)
         if terminated:
             obs = env.reset()
