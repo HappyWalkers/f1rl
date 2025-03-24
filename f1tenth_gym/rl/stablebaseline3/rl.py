@@ -101,31 +101,37 @@ def create_sac(env, seed):
     )
     return model
 
-def evaluate(env, model_path="./logs/best_model/best_model.zip", algorithm="SAC", num_episodes=5):
+def evaluate(env, model_path="./logs/best_model/best_model.zip", algorithm="SAC", num_episodes=5, use_wall_follow=False):
     """
-    Evaluates a trained model on the environment.
+    Evaluates a trained model or wall-following policy on the environment.
     
     Args:
         env: The environment to evaluate in
-        model_path: Path to the saved model
+        model_path: Path to the saved model (ignored when use_wall_follow is True)
         algorithm: Algorithm type (SAC, PPO, DDPG, TD3)
         num_episodes: Number of episodes to evaluate
+        use_wall_follow: Whether to use the wall-following policy
     """
-    logging.info(f"Loading {algorithm} model from {model_path}")
-    
-    # Load the appropriate model based on algorithm type
-    if algorithm == "PPO":
-        model = PPO.load(model_path)
-    elif algorithm == "DDPG":
-        model = DDPG.load(model_path)
-    elif algorithm == "TD3":
-        model = TD3.load(model_path)
-    elif algorithm == "SAC":
-        model = SAC.load(model_path)
+    if use_wall_follow:
+        from wall_follow import WallFollowPolicy
+        logging.info("Using wall-following policy for evaluation")
+        model = WallFollowPolicy()
     else:
-        raise ValueError(f"Unsupported algorithm: {algorithm}")
+        logging.info(f"Loading {algorithm} model from {model_path}")
+        
+        # Load the appropriate model based on algorithm type
+        if algorithm == "PPO":
+            model = PPO.load(model_path)
+        elif algorithm == "DDPG":
+            model = DDPG.load(model_path)
+        elif algorithm == "TD3":
+            model = TD3.load(model_path)
+        elif algorithm == "SAC":
+            model = SAC.load(model_path)
+        else:
+            raise ValueError(f"Unsupported algorithm: {algorithm}")
     
-    logging.info("Model loaded successfully")
+        logging.info("Model loaded successfully")
     
     # Initialize metrics
     episode_rewards = []
@@ -136,6 +142,10 @@ def evaluate(env, model_path="./logs/best_model/best_model.zip", algorithm="SAC"
     for episode in range(num_episodes):
         logging.info(f"Starting evaluation episode {episode+1}/{num_episodes}")
         obs, info = env.reset()
+        
+        # Reset wall follower if using it
+        if use_wall_follow:
+            model.reset()
         
         terminated = False
         truncated = False
