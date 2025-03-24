@@ -107,12 +107,12 @@ def evaluate(env, model_path="./logs/best_model/best_model.zip", algorithm="SAC"
     
     Args:
         env: The environment to evaluate in
-        model_path: Path to the saved model (ignored when use_wall_follow is True)
-        algorithm: Algorithm type (SAC, PPO, DDPG, TD3)
+        model_path: Path to the saved model (ignored when algorithm is WALL_FOLLOW)
+        algorithm: Algorithm type (SAC, PPO, DDPG, TD3, WALL_FOLLOW)
         num_episodes: Number of episodes to evaluate
         use_wall_follow: Whether to use the wall-following policy
     """
-    if use_wall_follow:
+    if algorithm == "WALL_FOLLOW":
         from wall_follow import WallFollowPolicy
         logging.info("Using wall-following policy for evaluation")
         model = WallFollowPolicy()
@@ -132,6 +132,7 @@ def evaluate(env, model_path="./logs/best_model/best_model.zip", algorithm="SAC"
             raise ValueError(f"Unsupported algorithm: {algorithm}")
     
         logging.info("Model loaded successfully")
+        logging.info("Model loaded successfully")
     
     # Initialize metrics
     episode_rewards = []
@@ -143,8 +144,8 @@ def evaluate(env, model_path="./logs/best_model/best_model.zip", algorithm="SAC"
         logging.info(f"Starting evaluation episode {episode+1}/{num_episodes}")
         obs, info = env.reset()
         
-        # Reset wall follower if using it
-        if use_wall_follow:
+        # Reset the wall follow policy if that's what we're using
+        if algorithm == "WALL_FOLLOW":
             model.reset()
         
         terminated = False
@@ -233,6 +234,3 @@ def train(env, seed):
         progress_bar=False,
         callback=eval_callback
     )
-
-    # After training, evaluate the best model
-    evaluate(env, model_path="./logs/best_model/best_model.zip", algorithm="SAC", num_episodes=5)
