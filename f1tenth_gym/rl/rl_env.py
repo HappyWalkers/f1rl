@@ -1,15 +1,16 @@
-import gym
+import gymnasium
+import gym  # Keep the original gym import
 import numpy as np
 import torch
-from gym import spaces
+from gymnasium import spaces
 import random
 from absl import logging
 
 
-class F110GymWrapper(gym.Env):
+class F110GymWrapper(gymnasium.Env):
     def __init__(self, waypoints, seed, map_path, num_agents):
         super().__init__()
-        self.env = gym.make(
+        self.env = gym.make(  # Use gym.make instead of gymnasium.make
             'f110_gym:f110-v0', 
             model='kinematic_ST',
             map=map_path, 
@@ -20,9 +21,10 @@ class F110GymWrapper(gym.Env):
             waypoints=waypoints,
             timestep=0.01,
         )
-        # Define observation/action spaces to match underlying env
+        
+        # Update observation space to match reduced dimensions (velocity, yaw, lidar)
         self.observation_space = spaces.Box(
-            low=0, high=30, shape=(1085,), dtype=np.float32
+            low=0, high=30, shape=(1082,), dtype=np.float32  # 2 state values + 1080 lidar points
         )
         # self.action_space = spaces.Box(
         #     low=np.array([-3.2, 0.0]), high=np.array([3.2, 9.51]), shape=(2,), dtype=np.float32
@@ -41,7 +43,12 @@ class F110GymWrapper(gym.Env):
         obs, reward, done, info = self.env.reset(initial_states=poses)
         self.current_step = 0
         self.last_frenet_arc_length = None
-        return np.concatenate((obs['state'][0][:5], obs['scans'][0])) # state is [x, y, steer_angle, vel, yaw_angle, yaw_rate, slip_angle]
+        # Only include velocity, yaw angle, and lidar scans
+        # state is [x, y, steer_angle, vel, yaw_angle, yaw_rate, slip_angle]
+        return np.concatenate((
+            obs['state'][0][3:5],  # vel, yaw_angle
+            obs['scans'][0]
+        )), {}
     
     def get_reset_pose(self):
         starting_idx = random.sample(range(len(self.waypoints)), 1)
@@ -62,7 +69,7 @@ class F110GymWrapper(gym.Env):
         linear_velocity = obs["linear_vels_x"][0]
         frenet_arc_length = obs["state_frenet"][0][0]
         frenet_lateral_offset = obs["state_frenet"][0][1]
-        collision = obs["collisions"][0] or (abs(frenet_lateral_offset) > 0.5)
+        collision = obs["collisions"][0]
         angular_velocity = obs["ang_vels_z"][0]
         lap_counts = obs['lap_counts'][0]
         if (self.last_frenet_arc_length is not None and frenet_arc_length - self.last_frenet_arc_length < -10):
@@ -94,7 +101,11 @@ class F110GymWrapper(gym.Env):
         self.last_frenet_arc_length = frenet_arc_length
         self.last_lap_counts = lap_counts
         
-        return np.concatenate((obs['state'][0][:5], obs['scans'][0])), float(reward), done or truncated or collision, info
+        # Return only velocity, yaw angle, and lidar scans
+        return np.concatenate((
+            obs['state'][0][3:5],  # vel, yaw_angle
+            obs['scans'][0]
+        )), float(reward), done or collision, truncated, info
 
     def render(self):
         self.env.render(mode='human_fast')

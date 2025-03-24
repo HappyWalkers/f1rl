@@ -1,6 +1,9 @@
 from stable_baselines3 import PPO, DDPG, DQN, TD3, SAC
 from absl import logging
 from stable_baselines3.common.callbacks import EvalCallback
+import os
+import time
+import numpy as np
 
 
 def create_ppo(env, seed):
@@ -98,6 +101,104 @@ def create_sac(env, seed):
     )
     return model
 
+def evaluate(env, model_path="./logs/best_model/best_model.zip", algorithm="SAC", num_episodes=5):
+    """
+    Evaluates a trained model on the environment.
+    
+    Args:
+        env: The environment to evaluate in
+        model_path: Path to the saved model
+        algorithm: Algorithm type (SAC, PPO, DDPG, TD3)
+        num_episodes: Number of episodes to evaluate
+    """
+    logging.info(f"Loading {algorithm} model from {model_path}")
+    
+    # Load the appropriate model based on algorithm type
+    if algorithm == "PPO":
+        model = PPO.load(model_path)
+    elif algorithm == "DDPG":
+        model = DDPG.load(model_path)
+    elif algorithm == "TD3":
+        model = TD3.load(model_path)
+    elif algorithm == "SAC":
+        model = SAC.load(model_path)
+    else:
+        raise ValueError(f"Unsupported algorithm: {algorithm}")
+    
+    logging.info("Model loaded successfully")
+    
+    # Initialize metrics
+    episode_rewards = []
+    episode_lengths = []
+    lap_times = []
+    
+    # Run evaluation episodes
+    for episode in range(num_episodes):
+        logging.info(f"Starting evaluation episode {episode+1}/{num_episodes}")
+        obs, info = env.reset()
+        
+        terminated = False
+        truncated = False
+        total_reward = 0
+        step_count = 0
+        episode_start_time = time.time()
+        
+        while not (terminated or truncated):
+            # Render environment
+            env.render()
+            
+            # Get action from model
+            action, _states = model.predict(obs, deterministic=True)
+            
+            # Take step in environment
+            obs, reward, terminated, truncated, info = env.step(action)
+            
+            total_reward += reward
+            step_count += 1
+            
+            # Optional: Add a small delay for better visualization
+            time.sleep(0.01)
+        
+        # Episode completed
+        episode_time = time.time() - episode_start_time
+        
+        # Record metrics
+        episode_rewards.append(total_reward)
+        episode_lengths.append(step_count)
+        lap_times.append(episode_time)
+        
+        logging.info(f"Episode {episode+1} finished:")
+        logging.info(f"  Reward: {total_reward:.2f}")
+        logging.info(f"  Length: {step_count} steps")
+        logging.info(f"  Time: {episode_time:.2f} seconds")
+        
+        # Reset for next episode
+        obs, info = env.reset()
+        terminated = False
+        truncated = False
+        print(f"Episode {episode+1} finished. Resetting...")
+    
+    # Compute summary statistics
+    mean_reward = np.mean(episode_rewards)
+    std_reward = np.std(episode_rewards)
+    mean_episode_length = np.mean(episode_lengths)
+    mean_lap_time = np.mean(lap_times)
+    
+    logging.info(f"Evaluation completed over {num_episodes} episodes:")
+    logging.info(f"  Mean reward: {mean_reward:.2f} ± {std_reward:.2f}")
+    logging.info(f"  Mean episode length: {mean_episode_length:.2f} steps")
+    logging.info(f"  Mean lap time: {mean_lap_time:.2f} seconds")
+    
+    return {
+        "mean_reward": mean_reward,
+        "std_reward": std_reward,
+        "mean_episode_length": mean_episode_length,
+        "mean_lap_time": mean_lap_time,
+        "episode_rewards": episode_rewards,
+        "episode_lengths": episode_lengths,
+        "lap_times": lap_times
+    }
+
 def train(env, seed):
     # model = create_ppo(env, seed)
     # model = create_ddpg(env, seed)
@@ -123,15 +224,5 @@ def train(env, seed):
         callback=eval_callback
     )
 
-    best_model = SAC.load("./logs/best_model/best_model.zip")
-
-    obs = env.reset()
-    terminated = False
-    while True:
-        env.render()
-        action, _states = best_model.predict(obs, deterministic=True)
-        obs, reward, terminated, info = env.step(action)
-        if terminated:
-            obs = env.reset()
-            terminated = False
-            print("Episode finished. Resetting...")
+    # After training, evaluate the best model
+    evaluate(env, model_path="./logs/best_model/best_model.zip", algorithm="SAC", num_episodes=5)
