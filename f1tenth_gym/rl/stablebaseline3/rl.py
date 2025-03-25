@@ -211,11 +211,63 @@ def evaluate(env, model_path="./logs/best_model/best_model.zip", algorithm="SAC"
     }
 
 def train(env, seed):
+    # Import wall follow policy for imitation learning
+    from wall_follow import WallFollowPolicy
+    
+    # Create the model
     # model = create_ppo(env, seed)
     # model = create_ddpg(env, seed)
     # model = create_td3(env, seed)
     model = create_sac(env, seed)
-
+    
+    # Initialize with imitation learning from wall following policy
+    logging.info("Starting imitation learning from wall-following policy")
+    wall_follower = WallFollowPolicy()
+    
+    # Collect demonstrations from wall follower
+    demonstrations = []
+    num_demos = 10  # Number of demonstration episodes
+    max_steps_per_demo = 10000  # Maximum steps per demonstration
+    
+    for demo_i in range(num_demos):
+        logging.info(f"Collecting demonstration {demo_i+1}/{num_demos}")
+        obs, info = env.reset()
+        wall_follower.reset()
+        
+        for step in range(max_steps_per_demo):
+            action, _ = wall_follower.predict(obs, deterministic=True)
+            next_obs, reward, terminated, truncated, info = env.step(action)
+            
+            # Store the transition
+            demonstrations.append((obs, action, reward, next_obs, terminated or truncated))
+            
+            if terminated or truncated:
+                break
+                
+            obs = next_obs
+    
+    logging.info(f"Collected {len(demonstrations)} demonstration transitions")
+    
+    # Pretrain the model using the demonstrations
+    logging.info("Pretraining model with demonstrations")
+    
+    # For SAC, we need to add the demonstrations to the replay buffer
+    if hasattr(model, 'replay_buffer'):
+        for obs, action, reward, next_obs, done in demonstrations:
+            model.replay_buffer.add(obs, next_obs, action, reward, done, [{}])
+        
+        # Perform some gradient steps on the demonstrations
+        if hasattr(model, 'train'):
+            logging.info("Training on demonstrations")
+            # Initialize the model by calling learn with 1 step before training
+            # This ensures the logger and other components are properly set up
+            model.learn(total_timesteps=1, log_interval=1)
+            # Now we can safely call train
+            model.train(gradient_steps=min(len(demonstrations), 100), batch_size=model.batch_size)
+    
+    logging.info("Imitation learning completed, starting RL training")
+    
+    # Continue with regular RL training
     eval_callback = EvalCallback(
         env,
         best_model_save_path="./logs/best_model",
@@ -227,9 +279,8 @@ def train(env, seed):
     )
 
     model.learn(
-        total_timesteps=10_000_000,
+        total_timesteps=10_000,
         log_interval=1,
-        tb_log_name="PPO",
         reset_num_timesteps=True,
         progress_bar=False,
         callback=eval_callback
