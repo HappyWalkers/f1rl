@@ -34,12 +34,10 @@ flags.DEFINE_integer("map_index", 63, "Index of the map to use")
 flags.DEFINE_string("waypoints_path", "f1tenth_gym/rl/levine_block_wp.csv", "Path to waypoints file")
 flags.DEFINE_integer("num_agents", 1, "Number of agents")
 flags.DEFINE_string("logging_level", "ERROR", "Logging level")
-flags.DEFINE_string("logging_level", "ERROR", "Logging level")
 flags.DEFINE_boolean("eval_only", False, "Run only evaluation (no training)")
 flags.DEFINE_string("model_path", "./logs/best_model/best_model.zip", "Path to the model to evaluate")
 flags.DEFINE_string("algorithm", "SAC", "Algorithm used (SAC, PPO, DDPG, TD3, WALL_FOLLOW)")
 flags.DEFINE_integer("num_eval_episodes", 5, "Number of episodes to evaluate")
-flags.DEFINE_boolean("use_wall_follow", False, "Use wall-following policy instead of RL")
 
 
 os.environ['F110GYM_PLOT_SCALE'] = str(60.)

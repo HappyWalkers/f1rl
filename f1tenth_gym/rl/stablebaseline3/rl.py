@@ -101,7 +101,7 @@ def create_sac(env, seed):
     )
     return model
 
-def evaluate(env, model_path="./logs/best_model/best_model.zip", algorithm="SAC", num_episodes=5, use_wall_follow=False):
+def evaluate(env, model_path="./logs/best_model/best_model.zip", algorithm="SAC", num_episodes=5):
     """
     Evaluates a trained model or wall-following policy on the environment.
     
@@ -110,7 +110,6 @@ def evaluate(env, model_path="./logs/best_model/best_model.zip", algorithm="SAC"
         model_path: Path to the saved model (ignored when algorithm is WALL_FOLLOW)
         algorithm: Algorithm type (SAC, PPO, DDPG, TD3, WALL_FOLLOW)
         num_episodes: Number of episodes to evaluate
-        use_wall_follow: Whether to use the wall-following policy
     """
     if algorithm == "WALL_FOLLOW":
         from wall_follow import WallFollowPolicy
@@ -131,7 +130,6 @@ def evaluate(env, model_path="./logs/best_model/best_model.zip", algorithm="SAC"
         else:
             raise ValueError(f"Unsupported algorithm: {algorithm}")
     
-        logging.info("Model loaded successfully")
         logging.info("Model loaded successfully")
     
     # Initialize metrics
@@ -226,7 +224,7 @@ def train(env, seed):
     
     # Collect demonstrations from wall follower
     demonstrations = []
-    num_demos = 10  # Number of demonstration episodes
+    num_demos = 100  # Number of demonstration episodes
     max_steps_per_demo = 10000  # Maximum steps per demonstration
     
     for demo_i in range(num_demos):
@@ -263,7 +261,7 @@ def train(env, seed):
             # This ensures the logger and other components are properly set up
             model.learn(total_timesteps=1, log_interval=1)
             # Now we can safely call train
-            model.train(gradient_steps=min(len(demonstrations), 100), batch_size=model.batch_size)
+            model.train(gradient_steps=min(len(demonstrations), 10000), batch_size=model.batch_size)
     
     logging.info("Imitation learning completed, starting RL training")
     
@@ -279,7 +277,7 @@ def train(env, seed):
     )
 
     model.learn(
-        total_timesteps=10_000,
+        total_timesteps=1000_000,
         log_interval=1,
         reset_num_timesteps=True,
         progress_bar=False,
