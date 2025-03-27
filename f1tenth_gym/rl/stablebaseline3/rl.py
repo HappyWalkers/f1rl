@@ -261,7 +261,7 @@ def train(env, seed):
             # This ensures the logger and other components are properly set up
             model.learn(total_timesteps=1, log_interval=1)
             # Now we can safely call train
-            model.train(gradient_steps=min(len(demonstrations), 10000), batch_size=model.batch_size)
+            model.train(gradient_steps=min(len(demonstrations), 10_000), batch_size=model.batch_size)
     
     logging.info("Imitation learning completed, starting RL training")
     
@@ -277,7 +277,7 @@ def train(env, seed):
     )
 
     model.learn(
-        total_timesteps=1000_000,
+        total_timesteps=50_000_000,
         log_interval=1,
         reset_num_timesteps=True,
         progress_bar=False,
