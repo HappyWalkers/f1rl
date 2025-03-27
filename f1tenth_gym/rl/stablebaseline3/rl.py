@@ -107,14 +107,20 @@ def evaluate(env, model_path="./logs/best_model/best_model.zip", algorithm="SAC"
     
     Args:
         env: The environment to evaluate in
-        model_path: Path to the saved model (ignored when algorithm is WALL_FOLLOW)
-        algorithm: Algorithm type (SAC, PPO, DDPG, TD3, WALL_FOLLOW)
+        model_path: Path to the saved model (ignored when algorithm is WALL_FOLLOW or PURE_PURSUIT)
+        algorithm: Algorithm type (SAC, PPO, DDPG, TD3, WALL_FOLLOW, PURE_PURSUIT)
         num_episodes: Number of episodes to evaluate
     """
     if algorithm == "WALL_FOLLOW":
         from wall_follow import WallFollowPolicy
         logging.info("Using wall-following policy for evaluation")
         model = WallFollowPolicy()
+    elif algorithm == "PURE_PURSUIT":
+        from pure_pursuit import PurePursuitPolicy
+        logging.info("Using pure pursuit policy for evaluation")
+        # Get waypoints from the environment if available
+        waypoints = getattr(env, 'waypoints', None)
+        model = PurePursuitPolicy(waypoints=waypoints)
     else:
         logging.info(f"Loading {algorithm} model from {model_path}")
         
@@ -142,8 +148,8 @@ def evaluate(env, model_path="./logs/best_model/best_model.zip", algorithm="SAC"
         logging.info(f"Starting evaluation episode {episode+1}/{num_episodes}")
         obs, info = env.reset()
         
-        # Reset the wall follow policy if that's what we're using
-        if algorithm == "WALL_FOLLOW":
+        # Reset the policy if needed
+        if hasattr(model, 'reset'):
             model.reset()
         
         terminated = False

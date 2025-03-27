@@ -36,7 +36,7 @@ flags.DEFINE_integer("num_agents", 1, "Number of agents")
 flags.DEFINE_string("logging_level", "ERROR", "Logging level")
 flags.DEFINE_boolean("eval_only", False, "Run only evaluation (no training)")
 flags.DEFINE_string("model_path", "./logs/best_model/best_model.zip", "Path to the model to evaluate")
-flags.DEFINE_string("algorithm", "SAC", "Algorithm used (SAC, PPO, DDPG, TD3, WALL_FOLLOW)")
+flags.DEFINE_string("algorithm", "SAC", "Algorithm used (SAC, PPO, DDPG, TD3, WALL_FOLLOW, PURE_PURSUIT)")
 flags.DEFINE_integer("num_eval_episodes", 5, "Number of episodes to evaluate")
 
 
