@@ -277,7 +277,7 @@ def train(env, seed):
     )
 
     model.learn(
-        total_timesteps=50_000_000,
+        total_timesteps=100_000_000,
         log_interval=1,
         reset_num_timesteps=True,
         progress_bar=False,
