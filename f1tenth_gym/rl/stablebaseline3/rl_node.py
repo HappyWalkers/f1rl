@@ -26,7 +26,7 @@ class RLF1TenthController(Node):
         self.last_steering_angle = 0.0
         
         # Load the trained model
-        model_path = os.path.expanduser("./logs/best_model/sac_12_levine_blocked.zip")
+        model_path = os.path.expanduser("./logs/best_model/best_model.zip")
         self.get_logger().info(f"Loading model from {model_path}")
         try:
             # Create observation and action spaces matching training environment
