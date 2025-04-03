@@ -20,6 +20,7 @@ class RLF1TenthController(Node):
         # Topics
         lidar_topic = '/scan'
         odom_topic = '/ego_racecar/odom'
+        # odom_topic = '/pf/pose/odom'
         drive_topic = '/drive'
         
         # Add last steering angle tracking
@@ -134,6 +135,11 @@ class RLF1TenthController(Node):
         ]
         
         # Combine with lidar scans
+        lidar_data = self.lidar_data[:1080]
+        # adapt to a special lidar
+        for i in range(1080):
+            if lidar_data[i] < 0.05:
+                lidar_data[i] = 30
         observation = np.concatenate((state, self.lidar_data))
         
         return observation
