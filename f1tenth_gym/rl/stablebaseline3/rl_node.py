@@ -140,7 +140,7 @@ class RLF1TenthController(Node):
         for i in range(1080):
             if lidar_data[i] < 0.05:
                 lidar_data[i] = 30
-        observation = np.concatenate((state, self.lidar_data))
+        observation = np.concatenate((state, lidar_data))
         
         return observation
     
