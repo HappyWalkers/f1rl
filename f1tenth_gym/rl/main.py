@@ -38,6 +38,7 @@ flags.DEFINE_boolean("eval_only", False, "Run only evaluation (no training)")
 flags.DEFINE_string("model_path", "./logs/best_model/best_model.zip", "Path to the model to evaluate")
 flags.DEFINE_string("algorithm", "SAC", "Algorithm used (SAC, PPO, DDPG, TD3, WALL_FOLLOW, PURE_PURSUIT)")
 flags.DEFINE_integer("num_eval_episodes", 5, "Number of episodes to evaluate")
+flags.DEFINE_boolean("use_imitation_learning", True, "Whether to use imitation learning before RL training")
 
 
 os.environ['F110GYM_PLOT_SCALE'] = str(60.)
@@ -120,8 +121,8 @@ def main(argv):
             num_episodes=FLAGS.num_eval_episodes,
         )
     else:
-        # Original training code
-        stablebaseline3.rl.train(env, seed=FLAGS.seed)
+        # Original training code with the new parameter
+        stablebaseline3.rl.train(env, seed=FLAGS.seed, use_imitation_learning=FLAGS.use_imitation_learning)
 
 
 if __name__ == "__main__":
