@@ -23,7 +23,7 @@ class WallFollowPolicy:
         self.desired_distance = desired_distance
         self.angle_min = -2.35  # From LiDAR configuration
         self.angle_increment = 0.00435  # From LiDAR configuration
-        self.looking_ahead_distance = 1.0  # Look-ahead for smoother control
+        self.looking_ahead_distance = 2.0  # Look-ahead for smoother control
         
         logging.info("Wall following policy initialized")
         
@@ -158,23 +158,32 @@ class WallFollowPolicy:
         Returns:
             speed: Appropriate speed based on conditions
         """
-        # Calculate absolute values for decision making
+        # Calculate absolute values
         abs_error = abs(error)
         abs_steering = abs(steering)
         
-        # Base speed on a combination of error and steering
-        if abs_error < self.angle_to_radian(10) and abs_steering < 0.1:
-            # Very small error and steering - go fast
-            return 6.0
-        elif abs_error < self.angle_to_radian(20) and abs_steering < 0.2:
-            # Moderate error and steering - medium speed
-            return 4.0
-        elif abs_error < self.angle_to_radian(30) and abs_steering < 0.3:
-            # Larger error - slower
-            return 2.5
-        else:
-            # Significant error or sharp turn - be cautious
-            return 1.5
+        # Convert error from radians to a more convenient scale
+        error_normalized = abs_error / self.angle_to_radian(30)
+        
+        # Normalize steering within its range (max is 0.4189)
+        steering_normalized = abs_steering / 0.4189
+        
+        # Calculate weights for error and steering (can be tuned)
+        error_weight = 0.6
+        steering_weight = 0.4
+        
+        # Combined factor (0.0 = perfect, 1.0 = max deviation)
+        combined_factor = error_weight * error_normalized + steering_weight * steering_normalized
+        
+        # Clamp the factor between 0 and 1
+        combined_factor = np.clip(combined_factor, 0.0, 1.0)
+        
+        # Map the factor to speed range: 1.5 (cautious) to 6.0 (fast)
+        min_speed = 1.5
+        max_speed = 8.0
+        speed = max_speed - combined_factor * (max_speed - min_speed)
+        
+        return speed
     
     def reset(self):
         """Reset the controller state"""
