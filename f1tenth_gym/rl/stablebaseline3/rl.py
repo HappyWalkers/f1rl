@@ -92,7 +92,7 @@ def create_sac(env, seed):
         use_sde_at_warmup=False,
         tensorboard_log="./sac_tensorboard/",
         policy_kwargs={
-            "net_arch": [512, 512, 512, 512]
+            "net_arch": [512, 512, 512, 512, 512]
         },
         verbose=1,
         seed=seed,
