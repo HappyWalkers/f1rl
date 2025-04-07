@@ -78,7 +78,7 @@ def create_sac(env, seed):
         batch_size=1024,
         tau=0.005,
         gamma=0.99,
-        train_freq=(1, "episode"),
+        train_freq=(10, "step"),
         gradient_steps=1,
         action_noise=None,
         replay_buffer_class=None,
@@ -92,7 +92,7 @@ def create_sac(env, seed):
         use_sde_at_warmup=False,
         tensorboard_log="./sac_tensorboard/",
         policy_kwargs={
-            "net_arch": [512, 512, 512, 512, 512]
+            "net_arch": [1024, 512, 256, 128, 64]
         },
         verbose=1,
         seed=seed,
