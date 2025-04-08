@@ -72,13 +72,13 @@ def create_sac(env, seed):
     model = SAC(
         policy="MlpPolicy",
         env=env,
-        learning_rate=3e-4,
+        learning_rate=1e-4,
         buffer_size=1_000_000,
-        learning_starts=1000,
+        learning_starts=10000,
         batch_size=1024,
         tau=0.005,
         gamma=0.99,
-        train_freq=(10, "step"),
+        train_freq=(100, "step"),
         gradient_steps=1,
         action_noise=None,
         replay_buffer_class=None,
@@ -92,7 +92,7 @@ def create_sac(env, seed):
         use_sde_at_warmup=False,
         tensorboard_log="./sac_tensorboard/",
         policy_kwargs={
-            "net_arch": [1024, 512, 256, 128, 64]
+            "net_arch": [1024, 512, 256, 128, 64, 32, 16]
         },
         verbose=1,
         seed=seed,
