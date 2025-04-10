@@ -118,9 +118,9 @@ def evaluate(env, model_path="./logs/best_model/best_model.zip", algorithm="SAC"
     elif algorithm == "PURE_PURSUIT":
         from pure_pursuit import PurePursuitPolicy
         logging.info("Using pure pursuit policy for evaluation")
-        # Get waypoints from the environment if available
-        waypoints = getattr(env, 'waypoints', None)
-        model = PurePursuitPolicy(waypoints=waypoints)
+        # Get track from the environment if available
+        track = getattr(env, 'track', None)
+        model = PurePursuitPolicy(track=track)
     else:
         logging.info(f"Loading {algorithm} model from {model_path}")
         
@@ -214,56 +214,68 @@ def evaluate(env, model_path="./logs/best_model/best_model.zip", algorithm="SAC"
         "lap_times": lap_times
     }
 
-def initialize_with_imitation_learning(model, env, num_demos=1000, max_steps_per_demo=2000):
+def initialize_with_imitation_learning(model, env, imitation_policy_type="PURE_PURSUIT", num_demos=1000, max_steps_per_demo=2000):
     """
-    Initialize a reinforcement learning model using imitation learning from a wall-following policy.
+    Initialize a reinforcement learning model using imitation learning from a specified policy.
     
     Args:
         model: The RL model to initialize
         env: The environment to collect demonstrations from
+        imitation_policy_type: Type of imitation policy (WALL_FOLLOW or PURE_PURSUIT)
         num_demos: Number of demonstration episodes to collect
         max_steps_per_demo: Maximum steps per demonstration episode
         
     Returns:
         model: The initialized model
     """
-    # Import wall follow policy for imitation learning
+    # Import policies for imitation learning
     from wall_follow import WallFollowPolicy
-    
-    # Initialize with imitation learning from wall following policy
-    logging.info("Starting imitation learning from wall-following policy")
-    wall_follower = WallFollowPolicy()
-    
-    # Collect demonstrations from wall follower
+    from pure_pursuit import PurePursuitPolicy
+
+    # Initialize the chosen imitation policy
+    logging.info(f"Starting imitation learning from {imitation_policy_type} policy")
+    if imitation_policy_type == "WALL_FOLLOW":
+        expert_policy = WallFollowPolicy()
+    elif imitation_policy_type == "PURE_PURSUIT":
+        # Ensure the environment has the track object needed by PurePursuit
+        track = getattr(env, 'track', None)
+        if track is None:
+            raise ValueError("Environment does not have a 'track' attribute required for PURE_PURSUIT imitation.")
+        expert_policy = PurePursuitPolicy(track=track)
+    else:
+        raise ValueError(f"Unsupported imitation_policy_type: {imitation_policy_type}")
+
+    # Collect demonstrations from the expert policy
     demonstrations = []
-    
+
     for demo_i in range(num_demos):
         logging.info(f"Collecting demonstration {demo_i+1}/{num_demos}")
         obs, info = env.reset()
-        wall_follower.reset()
-        
+        if hasattr(expert_policy, 'reset'):
+            expert_policy.reset()
+
         for step in range(max_steps_per_demo):
-            action, _ = wall_follower.predict(obs, deterministic=True)
+            action, _ = expert_policy.predict(obs, deterministic=True)
             next_obs, reward, terminated, truncated, info = env.step(action)
-            
+
             # Store the transition
             demonstrations.append((obs, action, reward, next_obs, terminated or truncated))
-            
+
             if terminated or truncated:
                 break
-                
+
             obs = next_obs
-    
+
     logging.info(f"Collected {len(demonstrations)} demonstration transitions")
-    
+
     # Pretrain the model using the demonstrations
     logging.info("Pretraining model with demonstrations")
-    
+
     # For models with replay buffers, add the demonstrations
     if hasattr(model, 'replay_buffer'):
         for obs, action, reward, next_obs, done in demonstrations:
             model.replay_buffer.add(obs, next_obs, action, reward, done, [{}])
-        
+
         # Perform gradient steps on the demonstrations
         if hasattr(model, 'train'):
             logging.info("Training on demonstrations")
@@ -272,11 +284,11 @@ def initialize_with_imitation_learning(model, env, num_demos=1000, max_steps_per
             model.learn(total_timesteps=1, log_interval=1)
             # Now we can safely call train
             model.train(gradient_steps=min(len(demonstrations), 10_000), batch_size=model.batch_size)
-    
+
     logging.info("Imitation learning completed")
     return model
 
-def train(env, seed, use_imitation_learning=True):
+def train(env, seed, use_imitation_learning=True, imitation_policy_type="PURE_PURSUIT"):
     # Create the model
     # model = create_ppo(env, seed)
     # model = create_ddpg(env, seed)
@@ -286,7 +298,7 @@ def train(env, seed, use_imitation_learning=True):
     # Initialize with imitation learning if enabled
     if use_imitation_learning:
         logging.info("Using imitation learning to bootstrap the model")
-        model = initialize_with_imitation_learning(model, env)
+        model = initialize_with_imitation_learning(model, env, imitation_policy_type=imitation_policy_type)
     else:
         logging.info("Skipping imitation learning, training from scratch")
     

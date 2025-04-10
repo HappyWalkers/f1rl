@@ -39,6 +39,8 @@ flags.DEFINE_string("model_path", "./logs/best_model/best_model.zip", "Path to t
 flags.DEFINE_string("algorithm", "SAC", "Algorithm used (SAC, PPO, DDPG, TD3, WALL_FOLLOW, PURE_PURSUIT)")
 flags.DEFINE_integer("num_eval_episodes", 5, "Number of episodes to evaluate")
 flags.DEFINE_boolean("use_imitation_learning", True, "Whether to use imitation learning before RL training")
+flags.DEFINE_enum("imitation_policy", "PURE_PURSUIT", ["WALL_FOLLOW", "PURE_PURSUIT"],
+                  "Policy to use for imitation learning.")
 
 
 os.environ['F110GYM_PLOT_SCALE'] = str(60.)
@@ -91,7 +93,8 @@ def main(argv):
         waypoints=track.waypoints,
         seed=FLAGS.seed,         
         map_path=config.map_dir + map_info[config.map_ind][1].split('.')[0],    
-        num_agents=FLAGS.num_agents
+        num_agents=FLAGS.num_agents,
+        track=track
     )
     
     # # check waypoints
@@ -122,7 +125,12 @@ def main(argv):
         )
     else:
         # Original training code with the new parameter
-        stablebaseline3.rl.train(env, seed=FLAGS.seed, use_imitation_learning=FLAGS.use_imitation_learning)
+        stablebaseline3.rl.train(
+            env,
+            seed=FLAGS.seed,
+            use_imitation_learning=FLAGS.use_imitation_learning,
+            imitation_policy_type=FLAGS.imitation_policy
+        )
 
 
 if __name__ == "__main__":
