@@ -9,6 +9,11 @@ from stable_baselines3 import SAC
 import os
 import time
 from gymnasium import spaces
+import sys
+# Add the parent directory to the Python path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
+from utils.Track import Track
+from utils import utils # Added import
 
 class RLF1TenthController(Node):
     """
@@ -31,7 +36,12 @@ class RLF1TenthController(Node):
         self.get_logger().info(f"Loading model from {model_path}")
         try:
             # Create observation and action spaces matching training environment
-            observation_space = spaces.Box(low=0, high=30, shape=(1082,), dtype=np.float32)
+            # Updated shape to 1085: [s, ey, vel, yaw_angle, yaw_rate] + 1080 lidar
+            observation_space = spaces.Box(
+                low=np.concatenate(([-1000.0, -5.0, -5.0, -np.pi, -10.0], np.zeros(1080))),
+                high=np.concatenate(([1000.0, 5.0, 20.0, np.pi, 10.0], np.full(1080, 30.0))),
+                shape=(1085,), dtype=np.float32
+            )
             action_space = spaces.Box(
                 low=np.array([-0.4189, 1]), 
                 high=np.array([0.4189, 20]), 
@@ -56,6 +66,44 @@ class RLF1TenthController(Node):
         self.lidar_data = None
         self.odom_data = None
         self.state_ready = False
+        self.s_guess = 0.0 # Initialize s_guess for Frenet conversion
+
+        # Load Track for Frenet Conversion
+        # TODO: Make map index and map directory configurable via ROS params or args
+        map_index = 63 # Using default map index from main.py
+        map_dir_ = './f1tenth_racetracks/' # Relative to workspace root where node is likely run from
+
+        class Config(utils.ConfigYAML): # Simple config mimicking main.py
+            map_dir = map_dir_
+            map_scale = 1
+            map_ind = map_index
+
+        config = Config()
+
+        try:
+            map_info_path = os.path.join(map_dir_, 'map_info.txt')
+            if not os.path.exists(map_info_path):
+                # Try relative to the file location if not found in cwd
+                 script_dir = os.path.dirname(os.path.abspath(__file__))
+                 map_info_path_alt = os.path.join(script_dir, '..', '..', '..', map_dir_, 'map_info.txt') # Adjust path as needed
+                 if os.path.exists(map_info_path_alt):
+                     map_info_path = map_info_path_alt
+                     config.map_dir = os.path.dirname(map_info_path_alt) # Update config map_dir
+                 else:
+                     raise FileNotFoundError(f"map_info.txt not found in {map_dir_} or alternative path.")
+            
+            map_info = np.genfromtxt(map_info_path, delimiter='|', dtype='str')
+            self.track, _ = Track.load_map(
+                config.map_dir, map_info, config.map_ind, config, scale=config.map_scale, downsample_step=1
+            )
+            # s_frame_max is now handled within Track.load_map or Track.from_numpy
+            self.get_logger().info(f"Track loaded successfully using map index {map_index}")
+        except Exception as e:
+            self.get_logger().error(f"Failed to load track using map index {map_index}: {e}")
+            # Print traceback for more details
+            import traceback
+            traceback.print_exc()
+            raise
         
         # Subscribers
         self.lidar_sub = self.create_subscription(
@@ -128,20 +176,50 @@ class RLF1TenthController(Node):
         if not self.state_ready:
             return None
         
-        # Format now matches the reduced observation space (velocity, yaw angle, lidar)
+        # Get Cartesian state from odometry
+        x = self.odom_data['x']
+        y = self.odom_data['y']
+        yaw = self.odom_data['yaw']
+        velocity = self.odom_data['velocity']
+        yaw_rate = self.odom_data['yaw_rate']
+
+        # Convert to Frenet frame
+        try:
+            s, ey, ephi = self.track.cartesian_to_frenet(x, y, yaw, s_guess=self.s_guess)
+            self.s_guess = s # Update s_guess for next iteration
+        except Exception as e:
+            self.get_logger().error(f"Frenet conversion failed: {e}. Using previous guess or zeros.")
+            # Handle potential errors, e.g., if track not loaded or conversion fails
+            s = self.s_guess
+            ey = 0.0 # Defaulting ey might be risky, but needed for shape
+
+        # Format observation: [s, ey, vel, yaw_angle, yaw_rate, lidar_scan]
         state = [
-            self.odom_data['velocity'],  # velocity
-            self.odom_data['yaw']        # yaw angle
+            s,
+            ey,
+            velocity,
+            yaw, # Keep global yaw for consistency with training env observation
+            yaw_rate
         ]
-        
+
         # Combine with lidar scans
-        lidar_data = self.lidar_data[:1080]
-        # adapt to a special lidar
-        for i in range(1080):
-            if lidar_data[i] < 0.05:
-                lidar_data[i] = 30
-        observation = np.concatenate((state, lidar_data))
-        
+        # Ensure lidar data has 1080 points, pad if necessary (shouldn't be needed with real lidar)
+        lidar_scan_processed = np.array(self.lidar_data[:1080], dtype=np.float32)
+        if len(lidar_scan_processed) < 1080:
+             lidar_scan_processed = np.pad(lidar_scan_processed, (0, 1080 - len(lidar_scan_processed)), 'constant', constant_values=30.0)
+
+        # Handle NaNs or Infs in lidar data (replace with max range)
+        lidar_scan_processed[np.isnan(lidar_scan_processed)] = 30.0
+        lidar_scan_processed[np.isinf(lidar_scan_processed)] = 30.0
+        lidar_scan_processed[lidar_scan_processed < 0.05] = 30.0 # Treat very close readings as max range
+
+        observation = np.concatenate((state, lidar_scan_processed))
+
+        # Final check for shape
+        if observation.shape != (1085,):
+            self.get_logger().error(f"Observation shape mismatch: expected (1085,), got {observation.shape}")
+            return None # Don't return incorrect shape
+
         return observation
     
     def control_loop(self):
@@ -152,6 +230,10 @@ class RLF1TenthController(Node):
         
         # Prepare observation
         obs = self.prepare_observation()
+        
+        if obs is None:
+            self.get_logger().warn("Failed to prepare observation, skipping control loop iteration.")
+            return
         
         # Get action from model
         start_time = time.time()
@@ -179,6 +261,7 @@ class RLF1TenthController(Node):
         
         # Log info
         self.get_logger().info(
+            f"State: s={obs[0]:.4f}, ey={obs[1]:.4f}, vel={obs[2]:.4f}, yaw={obs[3]:.4f}, yaw_rate={obs[4]:.4f}" +
             f"Action: steering={steering:.4f}, speed={speed:.4f}, " +
             f"Inference time: {inference_time*1000:.2f}ms"
         )

@@ -6,9 +6,11 @@ from functools import partial
 import jax.numpy as jnp
 import jax
 from numba import njit
+import datetime
+import hashlib
 
-from utils.cubic_spline import CubicSplineND
-import utils.utils as utils
+from .cubic_spline import CubicSplineND
+from .utils import ConfigYAML
 
 
 class Track:
@@ -19,7 +21,6 @@ class Track:
     centerline: CubicSplineND
     raceline: CubicSplineND
     filepath: Optional[str]
-    ss: Optional[np.ndarray] = None
     psis: Optional[np.ndarray] = None
     kappas: Optional[np.ndarray] = None
     accxs: Optional[np.ndarray] = None
@@ -37,7 +38,9 @@ class Track:
         kappas: Optional[np.ndarray] = None,
         accxs: Optional[np.ndarray] = None,
         waypoints: Optional[np.ndarray] = None,
-        s_frame_max: Optional[float] = None
+        s_frame_max: Optional[float] = None,
+        tr_rights: Optional[np.ndarray] = None,
+        tr_lefts: Optional[np.ndarray] = None
     ):
         """
         Initialize track object.
@@ -69,14 +72,19 @@ class Track:
         self.ks = kappas
         self.vxs = velxs
         self.axs = accxs
+        self.tr_rights = tr_rights if tr_rights is not None else np.zeros_like(ss)
+        self.tr_lefts = tr_lefts if tr_lefts is not None else np.zeros_like(ss)
 
         # approximate track length by linear-interpolation of x,y waypoints
         # note: we could use 'ss' but sometimes it is normalized to [0,1], so we recompute it here
         self.length = float(np.sum(np.sqrt(np.diff(xs) ** 2 + np.diff(ys) ** 2)))
 
         self.centerline = centerline or CubicSplineND(xs, ys, psis, kappas, velxs, accxs, ss)
+        self.len_s = len(self.centerline.s)
         self.raceline = raceline or CubicSplineND(xs, ys, psis, kappas, velxs, accxs, ss)
         self.s_guess = 0.0
+        self.tr_rights_jax = jnp.array(tr_rights)
+        self.tr_lefts_jax = jnp.array(tr_lefts)
 
     @staticmethod
     def from_numpy(waypoints: np.ndarray, s_frame_max, downsample_step = 1) -> Track:
@@ -108,7 +116,15 @@ class Track:
         ks=waypoints[::downsample_step, 4]
         vxs=waypoints[::downsample_step, 5]
         axs=waypoints[::downsample_step, 6]
-
+        
+        tr_lefts = None
+        tr_rights = None
+        if waypoints.shape[1] == 9:
+            tr_rights=waypoints[::downsample_step, 7]
+            tr_lefts=waypoints[::downsample_step, 8]
+        else:
+            tr_rights=None
+            tr_lefts=None
         refline = CubicSplineND(xs, ys, yaws, ks, vxs, axs)
 
         return Track(
@@ -123,8 +139,123 @@ class Track:
             raceline=refline,
             centerline=refline,
             waypoints=waypoints,
-            s_frame_max=s_frame_max
+            s_frame_max=s_frame_max,
+            tr_rights=tr_rights,
+            tr_lefts=tr_lefts
         )
+    
+    def to_raceline_csv(self, filepath: pathlib.Path, delimiter: str = ";" ) -> None:
+        """
+        Save the track waypoints to a CSV file in raceline format.
+        The header is 
+        # <current date and time>
+        # <hash of the raceline file>
+        # s_m; x_m; y_m; psi_rad; kappa_radpm; vx_mps; ax_mps2
+
+        Parameters
+        ----------
+        filepath : pathlib.Path
+            path to the raceline file
+        delimiter : str, optional
+            delimiter used in the file, by default ";"
+        """
+        if type(filepath) == str:
+            filepath = pathlib.Path(filepath)
+        # Check if path is valid
+        assert filepath.parent.exists(), f"parent directory does not exist ({filepath.parent})"
+        # Write the waypoints to the file
+        with open(filepath, "w") as file:
+            current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            file.write("# " + current_time + "\n")
+            file.write("# " + hashlib.md5(filepath.read_bytes()).hexdigest() + "\n")
+            file.write("# s_m; x_m; y_m; psi_rad; kappa_radpm; vx_mps; ax_mps2; w_tr_right_m; w_tr_left_m\n")
+            if not hasattr(self.raceline, 'tr_rights') or not hasattr(self.raceline, 'tr_lefts'):
+                np.savetxt(
+                    file,
+                    np.vstack(
+                        (
+                            self.raceline.ss,
+                            self.raceline.xs,
+                            self.raceline.ys,
+                            self.raceline.psis,
+                            self.raceline.ks,
+                            self.raceline.vxs,
+                            self.raceline.axs
+                        )
+                    ).T,
+                    delimiter=delimiter,
+                )
+            else:
+                np.savetxt(
+                    file,
+                    np.vstack(
+                        (
+                            self.raceline.ss,
+                            self.raceline.xs,
+                            self.raceline.ys,
+                            self.raceline.psis,
+                            self.raceline.ks,
+                            self.raceline.vxs,
+                            self.raceline.axs,
+                            self.raceline.tr_rights,
+                            self.raceline.tr_lefts
+                        )
+                    ).T,
+                    delimiter=delimiter,
+                )
+        return
+
+    def to_centerline_csv(self, filepath: pathlib.Path, delimiter: str = ";", track_half_width=4.0) -> None:
+        """
+        Save the track waypoints to a CSV file in centerline format.
+        The header is 
+        # x_m, y_m, w_tr_right_m, w_tr_left_m
+
+        Parameters
+        ----------
+        filepath : pathlib.Path
+            path to the raceline file
+        delimiter : str, optional
+            delimiter used in the file, by default ";"
+        track_half_width : float, optional
+            half width of the track, by default 4.0
+        """
+        if type(filepath) == str:
+            filepath = pathlib.Path(filepath)
+        # Check if path is valid
+        assert filepath.parent.exists(), f"parent directory does not exist ({filepath.parent})"
+        # Write the waypoints to the file
+        if not hasattr(self.raceline, 'tr_rights') or not hasattr(self.raceline, 'tr_lefts'):
+            with open(filepath, "w") as file:
+                file.write("# x_m, y_m, w_tr_right_m, w_tr_left_m\n")
+                np.savetxt(
+                    file,
+                    np.vstack(
+                        (
+                            self.centerline.xs,
+                            self.centerline.ys,
+                            track_half_width * np.ones_like(self.xs),
+                            track_half_width * np.ones_like(self.xs),
+                        )
+                    ).T,
+                    delimiter=delimiter,
+                )
+        else:
+            with open(filepath, "w") as file:
+                file.write("# x_m, y_m, w_tr_right_m, w_tr_left_m\n")
+                np.savetxt(
+                    file,
+                    np.vstack(
+                        (
+                            self.centerline.xs,
+                            self.centerline.ys,
+                            self.raceline.tr_rights,
+                            self.raceline.tr_lefts
+                        )
+                    ).T,
+                    delimiter=delimiter,
+                )
+        return
     
     @staticmethod
     def from_raceline_file(filepath: pathlib.Path, delimiter: str = ";", downsample_step = 1) -> Track:
@@ -234,7 +365,7 @@ class Track:
 
         return x, y, jnp.arctan2(jnp.sin(psi), jnp.cos(psi))
 
-    def cartesian_to_frenet(self, x, y, phi, s_guess, horizon=20):
+    def cartesian_to_frenet(self, x, y, phi, s_guess, horizon=20, s_inds=None):
         """
         Convert Cartesian coordinates to Frenet coordinates.
 
@@ -247,10 +378,8 @@ class Track:
             ey: lateral deviation
             ephi: heading deviation
         """
-        if s_guess is None: # Utilize internal state to keep track of the guess
-            s_guess = self.s_guess
 
-        s, ey = self.centerline.calc_arclength(x, y, s_guess, horizon)
+        s, ey = self.centerline.calc_arclength(x, y, s_guess, s_inds=s_inds)
         # Wrap around
         s = s % self.s_frame_max
 
@@ -269,6 +398,10 @@ class Track:
         phi = phi - yaw
         return s, ey, np.arctan2(np.sin(phi), np.cos(phi))
     
+    def get_track_range(self, s_guess, s_ind_range):
+        s_ind = self.centerline.find_segment_for_s(s_guess)
+        s_inds = (np.arange(s_ind, s_ind + s_ind_range) % self.len_s).astype(int)
+        return s_inds
     
     def cartesian_to_frenet_jax(self, x, y, phi, s_guess=None, horizon=None, s_ind_range=600):
         s_ind = self.centerline.find_segment_for_s(s_guess)
@@ -282,7 +415,7 @@ class Track:
                                     (s_ind + s_ind_range).astype(int)) % len(self.centerline.s)).astype(int)
         else:
             s_inds = np.arange(len(self.centerline.s))
-        return self.cartesian_to_frenet_jax_jit(x, y, phi, s_inds)
+        return self.cartesian_to_frenet_jax_jit((x, y, phi), s_inds)
     
     def vmap_cartesian_to_frenet_jax(self, poses, s_guess=None, horizon=None, s_ind_range=600):
         if s_guess is not None:
@@ -324,6 +457,15 @@ class Track:
             poses, s_inds
             )).T
     
+    @partial(jax.jit, static_argnums=(0))
+    def get_track_width(self, s):
+        s = s % self.s_frame_max
+        s_ind = self.centerline.find_segment_for_s(s)
+        return self.tr_rights_jax[s_ind], self.tr_lefts_jax[s_ind]
+    
+    @partial(jax.jit, static_argnums=(0))
+    def vmap_get_track_width(self, states):
+        return jax.vmap(self.get_track_width)(states[:, 0])
     
 
     def curvature(self, s):
@@ -345,7 +487,7 @@ class Track:
         # return self.centerline.find_curvature_jax(s)
     
     @staticmethod
-    def load_map(MAP_DIR, map_info, map_ind, config, origin=[0, 0], scale=1, reverse=False, downsample_step=1):
+    def load_map(MAP_DIR, map_info, map_ind, config, scale=1, reverse=False, downsample_step=1):
         """
         loads waypoints
         """
@@ -365,10 +507,8 @@ class Track:
         waypoints = np.loadtxt(MAP_DIR + config.wpt_path, delimiter=config.wpt_delim, skiprows=config.wpt_rowskip)
         if reverse: # NOTE: reverse map
             waypoints = waypoints[::-1]
-            # if map_ind == 41: waypoints[:, config.wpt_thind] = waypoints[:, config.wpt_thind] + 3.14
-        # if map_ind == 41: waypoints[:, config.wpt_thind] = waypoints[:, config.wpt_thind] + np.pi / 2
-        waypoints[:, config.wpt_xind] = (waypoints[:, config.wpt_xind] - origin[0]) * scale # NOTE: map scales
-        waypoints[:, config.wpt_yind] = (waypoints[:, config.wpt_yind] - origin[1]) * scale
+        waypoints[:, config.wpt_yind] = waypoints[:, config.wpt_yind] * scale
+        waypoints[:, config.wpt_xind] = waypoints[:, config.wpt_xind] * scale # NOTE: map scales
         if config.s_frame_max == -1:
             config.s_frame_max = waypoints[-1, 0]
         
@@ -383,10 +523,9 @@ class Track:
             config.wpt_yind = 2
             config.wpt_thind = 3
             config.wpt_vind = 5
-        # else:
-        init_theta = waypoints[0, config.wpt_thind]
-        track = Track.from_numpy(waypoints, config.s_frame_max, downsample_step)
-        track.waypoints_distances = np.linalg.norm(track.waypoints[1:, (1, 2)] - track.waypoints[:-1, (1, 2)], axis=1)
+        else:
+            track = Track.from_numpy(waypoints, config.s_frame_max, downsample_step)
+            track.waypoints_distances = np.linalg.norm(track.waypoints[1:, (1, 2)] - track.waypoints[:-1, (1, 2)], axis=1)
         
         return track, config
 
@@ -478,7 +617,7 @@ if __name__ == "__main__":
     # )
     # waypoints = np.hstack((track.raceline.s.reshape(-1,1), track.raceline.points))
     
-    class Config(utils.ConfigYAML):
+    class Config(ConfigYAML):
         sim_time_step = 0.1
         
         map_dir = './f1tenth_racetracks/'
