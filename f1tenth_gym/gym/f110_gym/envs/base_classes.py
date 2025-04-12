@@ -317,7 +317,7 @@ class RaceCar(object):
             # steering angle velocity input to steering velocity acceleration input
             accl, sv = pid(drive, steer, self.state[3], self.state[2], self.params['sv_max'], self.params['a_max'],
                         self.params['v_max'], self.params['v_min'])
-            logging.info(f"accl: {accl}, sv: {sv}")
+            logging.debug(f"accl: {accl}, sv: {sv}")
         
         if self.drive_control_mode == 'acc':
             if drive > self.params['a_max']:

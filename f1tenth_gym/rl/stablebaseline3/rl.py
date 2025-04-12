@@ -1,9 +1,15 @@
 from stable_baselines3 import PPO, DDPG, DQN, TD3, SAC
 from absl import logging
 from stable_baselines3.common.callbacks import EvalCallback
+from stable_baselines3.common.env_util import make_vec_env
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
+from stable_baselines3.common.monitor import Monitor
+from functools import partial
 import os
 import time
 import numpy as np
+
+from rl_env import F110GymWrapper # Import the wrapper
 
 
 def create_ppo(env, seed):
@@ -72,13 +78,13 @@ def create_sac(env, seed):
     model = SAC(
         policy="MlpPolicy",
         env=env,
-        learning_rate=1e-4,
+        learning_rate=3e-4,
         buffer_size=1_000_000,
         learning_starts=10000,
         batch_size=1024,
         tau=0.005,
         gamma=0.99,
-        train_freq=(100, "step"),
+        train_freq=(10, "step"),
         gradient_steps=1,
         action_noise=None,
         replay_buffer_class=None,
@@ -92,7 +98,7 @@ def create_sac(env, seed):
         use_sde_at_warmup=False,
         tensorboard_log="./sac_tensorboard/",
         policy_kwargs={
-            "net_arch": [1024, 512, 256, 128, 64, 32, 16]
+            "net_arch": [1024, 1024, 512, 512, 256, 256, 128, 128, 64, 64, 32, 32, 16, 16]
         },
         verbose=1,
         seed=seed,
@@ -101,12 +107,12 @@ def create_sac(env, seed):
     )
     return model
 
-def evaluate(env, model_path="./logs/best_model/best_model.zip", algorithm="SAC", num_episodes=5):
+def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm="SAC", num_episodes=5):
     """
     Evaluates a trained model or wall-following policy on the environment.
     
     Args:
-        env: The environment to evaluate in
+        eval_env: The environment (single instance) to evaluate in
         model_path: Path to the saved model (ignored when algorithm is WALL_FOLLOW or PURE_PURSUIT)
         algorithm: Algorithm type (SAC, PPO, DDPG, TD3, WALL_FOLLOW, PURE_PURSUIT)
         num_episodes: Number of episodes to evaluate
@@ -119,7 +125,7 @@ def evaluate(env, model_path="./logs/best_model/best_model.zip", algorithm="SAC"
         from pure_pursuit import PurePursuitPolicy
         logging.info("Using pure pursuit policy for evaluation")
         # Get track from the environment if available
-        track = getattr(env, 'track', None)
+        track = getattr(eval_env.unwrapped, 'track', None) # Access unwrapped env for track
         model = PurePursuitPolicy(track=track)
     else:
         logging.info(f"Loading {algorithm} model from {model_path}")
@@ -146,7 +152,7 @@ def evaluate(env, model_path="./logs/best_model/best_model.zip", algorithm="SAC"
     # Run evaluation episodes
     for episode in range(num_episodes):
         logging.info(f"Starting evaluation episode {episode+1}/{num_episodes}")
-        obs, info = env.reset()
+        obs = eval_env.reset()
         
         # Reset the policy if needed
         if hasattr(model, 'reset'):
@@ -160,13 +166,16 @@ def evaluate(env, model_path="./logs/best_model/best_model.zip", algorithm="SAC"
         
         while not (terminated or truncated):
             # Render environment
-            env.render()
+            eval_env.render()
             
             # Get action from model
-            action, _states = model.predict(obs, deterministic=True)
+            # Extract the observation for a single environment from the batch
+            single_obs = obs[0] if isinstance(obs, np.ndarray) and obs.ndim > 1 else obs
+            action, _states = model.predict(single_obs, deterministic=True)
             
             # Take step in environment
-            obs, reward, terminated, truncated, info = env.step(action)
+            # Gymnasium envs return 5 values
+            obs, reward, terminated, truncated, info = eval_env.step(action)
             
             total_reward += reward
             step_count += 1
@@ -188,9 +197,6 @@ def evaluate(env, model_path="./logs/best_model/best_model.zip", algorithm="SAC"
         logging.info(f"  Time: {episode_time:.2f} seconds")
         
         # Reset for next episode
-        obs, info = env.reset()
-        terminated = False
-        truncated = False
         print(f"Episode {episode+1} finished. Resetting...")
     
     # Compute summary statistics
@@ -214,59 +220,93 @@ def evaluate(env, model_path="./logs/best_model/best_model.zip", algorithm="SAC"
         "lap_times": lap_times
     }
 
-def initialize_with_imitation_learning(model, env, imitation_policy_type="PURE_PURSUIT", num_demos=1000, max_steps_per_demo=2000):
+def initialize_with_imitation_learning(model, env, imitation_policy_type="PURE_PURSUIT", total_transitions=1000_000):
     """
     Initialize a reinforcement learning model using imitation learning from a specified policy.
     
     Args:
         model: The RL model to initialize
-        env: The environment to collect demonstrations from
+        env: The environment (must be a VecEnv) to collect demonstrations from.
         imitation_policy_type: Type of imitation policy (WALL_FOLLOW or PURE_PURSUIT)
-        num_demos: Number of demonstration episodes to collect
-        max_steps_per_demo: Maximum steps per demonstration episode
-        
+        total_transitions: Total number of transitions to collect across all environments
+    
     Returns:
         model: The initialized model
+        
+    Raises:
+        TypeError: If env is not a VecEnv instance
     """
+    # Check if env is a VecEnv and raise an error if it's not
+    if not isinstance(env, (SubprocVecEnv)):
+        raise TypeError("env must be a VecEnv instance")
+
     # Import policies for imitation learning
     from wall_follow import WallFollowPolicy
     from pure_pursuit import PurePursuitPolicy
 
-    # Initialize the chosen imitation policy
+    # Initialize the expert policies for each environment
     logging.info(f"Starting imitation learning from {imitation_policy_type} policy")
-    if imitation_policy_type == "WALL_FOLLOW":
-        expert_policy = WallFollowPolicy()
-    elif imitation_policy_type == "PURE_PURSUIT":
-        # Ensure the environment has the track object needed by PurePursuit
-        track = getattr(env, 'track', None)
-        if track is None:
-            raise ValueError("Environment does not have a 'track' attribute required for PURE_PURSUIT imitation.")
-        expert_policy = PurePursuitPolicy(track=track)
-    else:
-        raise ValueError(f"Unsupported imitation_policy_type: {imitation_policy_type}")
+    expert_policies = []
+    for i in range(env.num_envs):
+        if imitation_policy_type == "WALL_FOLLOW":
+            expert_policies.append(WallFollowPolicy())
+        elif imitation_policy_type == "PURE_PURSUIT":
+            # Extract the track for this environment
+            track = env.get_attr("track", indices=i)[0]
+            # Ensure the environment has the track object needed by PurePursuit
+            if not track:
+                raise ValueError("Environment does not have a 'track' attribute required for PURE_PURSUIT imitation.")
+            expert_policies.append(PurePursuitPolicy(track=track))
+        else:
+            raise ValueError(f"Unsupported imitation_policy_type: {imitation_policy_type}")
 
-    # Collect demonstrations from the expert policy
+    # Collect demonstrations from the expert policies
     demonstrations = []
-
-    for demo_i in range(num_demos):
-        logging.info(f"Collecting demonstration {demo_i+1}/{num_demos}")
-        obs, info = env.reset()
-        if hasattr(expert_policy, 'reset'):
-            expert_policy.reset()
-
-        for step in range(max_steps_per_demo):
-            action, _ = expert_policy.predict(obs, deterministic=True)
-            next_obs, reward, terminated, truncated, info = env.step(action)
-
-            # Store the transition
-            demonstrations.append((obs, action, reward, next_obs, terminated or truncated))
-
-            if terminated or truncated:
-                break
-
-            obs = next_obs
-
-    logging.info(f"Collected {len(demonstrations)} demonstration transitions")
+    collected_transitions = 0
+    
+    # Reset all environments
+    observations = env.reset()
+    # Reset all expert policies
+    for policy in expert_policies:
+        if hasattr(policy, 'reset'):
+            policy.reset()
+    
+    dones = [False] * env.num_envs
+    
+    logging.info(f"Collecting {total_transitions} transitions across {env.num_envs} environments")
+    
+    while collected_transitions < total_transitions:
+        env.render(mode='human')
+        # Generate expert actions for each environment
+        actions = []
+        for i in range(env.num_envs):
+            # Get action from the appropriate expert policy
+            action, _ = expert_policies[i].predict(observations[i], deterministic=True)
+            actions.append(action)
+        
+        # Convert to numpy array for VecEnv
+        actions = np.array(actions)
+        
+        # Step all environments together
+        next_observations, rewards, dones, infos = env.step(actions)
+        
+        # Store transitions 
+        demonstrations.append((observations, actions, rewards, next_observations, dones))
+        collected_transitions += env.num_envs
+        
+        # reset the finished environments
+        for i in range(env.num_envs):
+            if dones[i]:
+                next_observations[i] = env.env_method('reset', indices=i)[0][0]
+                if hasattr(expert_policies[i], 'reset'):
+                    expert_policies[i].reset()
+        observations = next_observations
+        
+        # Print progress every progress_interval transitions
+        if collected_transitions % (total_transitions // 10) < env.num_envs:
+            logging.info(f"Progress: {collected_transitions}/{total_transitions} transitions collected")
+            
+    logging.info(f"Collected {collected_transitions} demonstration transitions")
 
     # Pretrain the model using the demonstrations
     logging.info("Pretraining model with demonstrations")
@@ -283,42 +323,116 @@ def initialize_with_imitation_learning(model, env, imitation_policy_type="PURE_P
             # This ensures the logger and other components are properly set up
             model.learn(total_timesteps=1, log_interval=1)
             # Now we can safely call train
-            model.train(gradient_steps=min(len(demonstrations), 10_000), batch_size=model.batch_size)
+            model.train(gradient_steps=10_000, batch_size=model.batch_size)
 
     logging.info("Imitation learning completed")
     return model
 
-def train(env, seed, use_imitation_learning=True, imitation_policy_type="PURE_PURSUIT"):
-    # Create the model
-    # model = create_ppo(env, seed)
-    # model = create_ddpg(env, seed)
-    # model = create_td3(env, seed)
-    model = create_sac(env, seed)
+def make_env(env_id, rank, seed=0, env_kwargs=None):
+    """
+    Utility function for multiprocessed env.
+    :param env_id: (str) the environment ID (unused here, but common pattern)
+    :param rank: (int) index of the subprocess
+    :param seed: (int) the initial seed for RNG
+    :param env_kwargs: (dict) arguments to pass to the env constructor
+    """
+    def _init():
+        nonlocal env_kwargs
+        if env_kwargs is None:
+            env_kwargs = {}
+        # Ensure each subprocess gets a unique seed
+        current_seed = seed + rank 
+        env = F110GymWrapper(**env_kwargs, seed=current_seed)
+        # Optional: Wrap with Monitor for logging episode stats
+        env = Monitor(env)
+        return env
+    # set_global_seeds(seed) # Deprecated in SB3
+    return _init
+
+# Updated train function to handle VecEnv and Domain Randomization
+def train(env_kwargs, seed, num_envs=1, use_domain_randomization=False, use_imitation_learning=True, imitation_policy_type="PURE_PURSUIT", algorithm="SAC"):
+    """
+    Trains the RL model.
+
+    Args:
+        env_kwargs (dict): Base arguments for the F110GymWrapper environment.
+        seed (int): Random seed.
+        num_envs (int): Number of parallel environments to use.
+        use_domain_randomization (bool): Whether to randomize environment parameters.
+        use_imitation_learning (bool): Whether to use imitation learning before RL.
+        imitation_policy_type (str): Policy for imitation learning.
+        algorithm (str): RL algorithm to use (e.g., SAC, PPO).
+    """
+    # --- Create Environment(s) ---
+    env_fns = []
+    for i in range(num_envs):
+        rank_seed = seed + i
+        current_env_kwargs = env_kwargs.copy()
+        
+        if use_domain_randomization:
+            # Sample parameters randomly for this environment instance
+            rng = np.random.default_rng(rank_seed)
+            current_env_kwargs['mu'] = rng.uniform(0.7, 1.3) # Example range
+            current_env_kwargs['C_Sf'] = rng.uniform(3.0, 6.0)
+            current_env_kwargs['C_Sr'] = rng.uniform(3.0, 6.0)
+            # Add more parameter randomization here (mass, inertia, lengths, etc.)
+            current_env_kwargs['m'] = rng.uniform(3.0, 4.5)
+            current_env_kwargs['I'] = rng.uniform(0.03, 0.06)
+            current_env_kwargs['lidar_noise_stddev'] = rng.uniform(0.0, 0.02) # Example range
+            # Randomize push probabilities, keeping average push = 1
+            sampled_push_0_prob = rng.uniform(0.1, 0.4) # Sample p0
+            current_env_kwargs['push_0_prob'] = sampled_push_0_prob
+            current_env_kwargs['push_2_prob'] = sampled_push_0_prob # Set p2 = p0
+
+        # Create the thunk (function) for this env instance
+        # Use partial to pass the potentially modified kwargs
+        env_fn = partial(make_env(env_id=f"f110-rank{i}", rank=i, seed=seed, env_kwargs=current_env_kwargs))
+        env_fns.append(env_fn)
+        
+    # Create the vectorized environment
+    vec_env_cls = DummyVecEnv if num_envs == 1 else SubprocVecEnv
+    env = vec_env_cls(env_fns)
     
-    # Initialize with imitation learning if enabled
+    # --- Create Model ---
+    if algorithm == "PPO":
+        model = create_ppo(env, seed)
+    elif algorithm == "DDPG":
+        model = create_ddpg(env, seed)
+    elif algorithm == "TD3":
+        model = create_td3(env, seed)
+    elif algorithm == "SAC":
+        model = create_sac(env, seed)
+    else:
+        raise ValueError(f"Unsupported algorithm: {algorithm}")
+
+    # --- Imitation Learning (Optional, might need adaptation for VecEnv) ---
     if use_imitation_learning:
-        logging.info("Using imitation learning to bootstrap the model")
+        logging.info("Using imitation learning to bootstrap the model.")
         model = initialize_with_imitation_learning(model, env, imitation_policy_type=imitation_policy_type)
     else:
-        logging.info("Skipping imitation learning, training from scratch")
-    
-    logging.info("Starting RL training")
-    
-    # Continue with regular RL training
+        logging.info("Skipping imitation learning.")
+
+    logging.info(f"Starting RL training with {env.num_envs} environments.")
+
+    # --- RL Training ---
+    # Create a separate VecEnv for evaluation using the base (non-randomized) params
+    eval_env_fn = partial(make_env(env_id="f110-eval", rank=0, seed=seed + 1000, env_kwargs=env_kwargs))
+    eval_vec_env = DummyVecEnv([eval_env_fn]) # Single env for standard evaluation
+
     eval_callback = EvalCallback(
-        env,
+        eval_vec_env, # Use the non-randomized eval env
         best_model_save_path="./logs/best_model",
         log_path="./logs/results",
-        eval_freq=10000,
-        n_eval_episodes=5,
+        eval_freq=max(10000 // num_envs, 1), # Evaluate less frequently per env step
+        n_eval_episodes=5, # Standard number of eval episodes
         deterministic=True,
-        render=False
+        render=False,
+        warn=False # Suppress warnings about eval_env mismatch if any
     )
 
     model.learn(
         total_timesteps=10_000_000,
-        log_interval=1,
-        reset_num_timesteps=True,
-        progress_bar=False,
+        log_interval=10, # Log less frequently for VecEnv
+        reset_num_timesteps=True, # Start timesteps from 0
         callback=eval_callback
     )

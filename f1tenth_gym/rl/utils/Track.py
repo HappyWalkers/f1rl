@@ -12,6 +12,8 @@ import hashlib
 from .cubic_spline import CubicSplineND
 from .utils import ConfigYAML
 
+jax.config.update("jax_platforms", "cpu")
+
 
 class Track:
     ss: np.ndarray
