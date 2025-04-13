@@ -36,11 +36,11 @@ class RLF1TenthController(Node):
         self.get_logger().info(f"Loading model from {model_path}")
         try:
             # Create observation and action spaces matching training environment
-            # Updated shape to 1085: [s, ey, vel, yaw_angle, yaw_rate] + 1080 lidar
+            # Updated shape to 1084: [s, ey, vel, yaw_angle] + 1080 lidar
             observation_space = spaces.Box(
-                low=np.concatenate(([-1000.0, -5.0, -5.0, -np.pi, -10.0], np.zeros(1080))),
-                high=np.concatenate(([1000.0, 5.0, 20.0, np.pi, 10.0], np.full(1080, 30.0))),
-                shape=(1085,), dtype=np.float32
+                low=np.concatenate(([-1000.0, -5.0, -5.0, -np.pi], np.zeros(1080))),
+                high=np.concatenate(([1000.0, 5.0, 12.0, np.pi], np.full(1080, 30.0))),
+                shape=(1084,), dtype=np.float32
             )
             action_space = spaces.Box(
                 low=np.array([-0.4189, 1]), 
@@ -181,8 +181,7 @@ class RLF1TenthController(Node):
         y = self.odom_data['y']
         yaw = self.odom_data['yaw']
         velocity = self.odom_data['velocity']
-        yaw_rate = self.odom_data['yaw_rate']
-
+        
         # Convert to Frenet frame
         try:
             s, ey, ephi = self.track.cartesian_to_frenet(x, y, yaw, s_guess=self.s_guess)
@@ -193,13 +192,12 @@ class RLF1TenthController(Node):
             s = self.s_guess
             ey = 0.0 # Defaulting ey might be risky, but needed for shape
 
-        # Format observation: [s, ey, vel, yaw_angle, yaw_rate, lidar_scan]
+        # Format observation: [s, ey, vel, yaw_angle, lidar_scan]
         state = [
             s,
             ey,
             velocity,
             yaw, # Keep global yaw for consistency with training env observation
-            yaw_rate
         ]
 
         # Combine with lidar scans
@@ -216,8 +214,8 @@ class RLF1TenthController(Node):
         observation = np.concatenate((state, lidar_scan_processed))
 
         # Final check for shape
-        if observation.shape != (1085,):
-            self.get_logger().error(f"Observation shape mismatch: expected (1085,), got {observation.shape}")
+        if observation.shape != (1084,):
+            self.get_logger().error(f"Observation shape mismatch: expected (1084,), got {observation.shape}")
             return None # Don't return incorrect shape
 
         return observation
@@ -261,7 +259,7 @@ class RLF1TenthController(Node):
         
         # Log info
         self.get_logger().info(
-            f"State: s={obs[0]:.4f}, ey={obs[1]:.4f}, vel={obs[2]:.4f}, yaw={obs[3]:.4f}, yaw_rate={obs[4]:.4f}" +
+            f"State: s={obs[0]:.4f}, ey={obs[1]:.4f}, vel={obs[2]:.4f}, yaw={obs[3]:.4f}, " +
             f"Action: steering={steering:.4f}, speed={speed:.4f}, " +
             f"Inference time: {inference_time*1000:.2f}ms"
         )

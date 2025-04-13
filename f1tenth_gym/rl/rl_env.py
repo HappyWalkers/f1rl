@@ -18,25 +18,29 @@ class F110GymWrapper(gymnasium.Env):
                  track: Track,
                  max_episode_steps=10000,
                  # Domain Randomization Params
-                 mu=1.0, 
-                 C_Sf=4.718, 
-                 C_Sr=5.4562, 
-                 lf=0.15875, 
-                 lr=0.17145, 
-                 h=0.074, 
-                 m=3.74, 
-                 I=0.04712, 
-                 s_min=-0.4189, 
-                 s_max=0.4189, 
-                 sv_min=-3.2, 
-                 sv_max=3.2, 
-                 v_switch=7.319, 
-                 a_max=9.51, 
-                 v_min=-5.0, 
-                 v_max=20.0, 
-                 width=0.31, 
-                 length=0.58,
-                 lidar_noise_stddev=0.0,
+                 mu=0.6,                         # Friction coefficient
+                 C_Sf=4.718,                        # Cornering stiffness coefficient, front
+                 C_Sr=5.4562,                       # Cornering stiffness coefficient, rear
+                 lf=0.15875,                        # Distance from center of gravity to front axle
+                 lr=0.17145,                        # Distance from center of gravity to rear axle
+                 h=0.074,                           # Height of center of gravity
+                 m=3.74,                            # Total mass of the vehicle
+                 I=0.04712,                         # Moment of inertial of the entire vehicle about the z axis
+                 s_min=-0.4189,                     # Minimum steering angle constraint
+                 s_max=0.4189,                      # Maximum steering angle constraint
+                 sv_min=-3.2,                       # Minimum steering velocity constraint
+                 sv_max=3.2,                        # Maximum steering velocity constraint
+                 v_switch=7.319,                    # Switching velocity
+                 a_max=4,                        # Maximum acceleration
+                 v_min=-5.0,                        # Minimum velocity
+                 v_max=12.0,                        # Maximum velocity
+                 width=0.31,                        # Width of the vehicle
+                 length=0.58,                       # Length of the vehicle
+                 lidar_noise_stddev=0.0,            # Noise std dev for lidar
+                 s_noise_stddev=0.0,               # Noise std dev for s (arc length)
+                 ey_noise_stddev=0.0,             # Noise std dev for ey (lateral offset)
+                 vel_noise_stddev=0.0,             # Noise std dev for velocity
+                 yaw_noise_stddev=0.0,            # Noise std dev for yaw angle (radians)
                  push_0_prob=0, # Probability of pushing 0 times
                  push_2_prob=0  # Probability of pushing 2 times
                  ):
@@ -47,6 +51,10 @@ class F110GymWrapper(gymnasium.Env):
 
         # Store DR params
         self.lidar_noise_stddev = lidar_noise_stddev
+        self.s_noise_stddev = s_noise_stddev
+        self.ey_noise_stddev = ey_noise_stddev
+        self.vel_noise_stddev = vel_noise_stddev
+        self.yaw_noise_stddev = yaw_noise_stddev
         self.push_0_prob = push_0_prob
         self.push_2_prob = push_2_prob
         self.push_1_prob = 1.0 - push_0_prob - push_2_prob
@@ -71,15 +79,15 @@ class F110GymWrapper(gymnasium.Env):
             # drive_control_mode='acc',
             # steering_control_mode='vel',
             waypoints=waypoints,
-            timestep=0.01,
+            timestep=0.03,
         )
 
-        # Update observation space: [s, ey, vel, yaw_angle, yaw_rate] + lidar
+        # Update observation space: [s, ey, vel, yaw_angle] + lidar
         # low/high values are approximate, might need refinement
         self.observation_space = spaces.Box(
-            low=np.concatenate(([-1000.0, -5.0, v_min, -np.pi, -10.0], np.zeros(1080))),
-            high=np.concatenate(([1000.0, 5.0, v_max, np.pi, 10.0], np.full(1080, 30.0))),
-            shape=(1085,), dtype=np.float32  # 5 state values + 1080 lidar points
+            low=np.concatenate(([-1000.0, -5.0, v_min, -np.pi], np.zeros(1080))),
+            high=np.concatenate(([1000.0, 5.0, v_max, np.pi], np.full(1080, 30.0))),
+            shape=(1084,), dtype=np.float32  # 4 state values + 1080 lidar points
         )
         # self.action_space = spaces.Box(
         #     low=np.array([-3.2, 0.0]), high=np.array([3.2, 9.51]), shape=(2,), dtype=np.float32
@@ -97,21 +105,39 @@ class F110GymWrapper(gymnasium.Env):
         self.last_lap_counts = 0
 
     def _process_observation(self, obs):
-        """Processes the raw observation dict and applies lidar noise."""
+        """Processes the raw observation dict and applies noise."""
         lidar_scan = obs['scans'][0]
+
+        # Get the state components
+        s, ey = obs["state_frenet"][0][0:2]  # Frenet coordinates
+        vel, yaw_angle = obs['state'][0][3:5]  # Velocity and yaw angle
+
+        # Apply noise to state components
+        if self.s_noise_stddev > 0:
+            s += self.np_random.normal(0, self.s_noise_stddev) * s if s != 0 else self.np_random.normal(0, self.s_noise_stddev)
+        
+        if self.ey_noise_stddev > 0:
+            ey += self.np_random.normal(0, self.ey_noise_stddev) * ey if ey != 0 else self.np_random.normal(0, self.ey_noise_stddev)
+        
+        if self.vel_noise_stddev > 0:
+            vel += self.np_random.normal(0, self.vel_noise_stddev) * vel if vel != 0 else self.np_random.normal(0, self.vel_noise_stddev)
+            vel = max(vel, 0.0)  # Ensure velocity doesn't go negative
+        
+        if self.yaw_noise_stddev > 0:
+            yaw_angle += self.np_random.normal(0, self.yaw_noise_stddev) * yaw_angle if yaw_angle != 0 else self.np_random.normal(0, self.yaw_noise_stddev)
+            # Keep yaw angle in range [-pi, pi]
+            yaw_angle = (yaw_angle + np.pi) % (2 * np.pi) - np.pi
 
         # Apply lidar noise
         if self.lidar_noise_stddev > 0:
             noise = self.np_random.normal(0, self.lidar_noise_stddev, lidar_scan.shape)
-            lidar_scan += noise
+            lidar_scan += noise * lidar_scan
             lidar_scan = np.clip(lidar_scan, 0, 30.0) # Assuming max range is 30
 
-        # Observation: [s, ey, vel, yaw_angle, yaw_rate, scans]
-        # state is [x, y, steer_angle, vel, yaw_angle, yaw_rate, slip_angle]
-        # state_frenet is [s, ey, steer_angle, vel_s, yaw_angle_frenet, yaw_rate_frenet, vel_ey]
+        # Combine all observation components with noise
         processed_obs = np.concatenate((
-            obs["state_frenet"][0][0:2], # s, ey
-            obs['state'][0][3:6],  # vel, yaw_angle, yaw_rate
+            [s, ey],  # Frenet coordinates with noise
+            [vel, yaw_angle],  # Velocity and yaw angle with noise
             lidar_scan
         )).astype(np.float32)
         return processed_obs

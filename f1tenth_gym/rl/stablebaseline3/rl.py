@@ -134,7 +134,7 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
         if is_vec_env:
             track = eval_env.get_attr("track", indices=0)[0]  # Get track from first env
         else:
-            track = getattr(eval_env.unwrapped, 'track', None)  # Access unwrapped env for track
+            track = getattr(eval_env, 'track', None)  # Access unwrapped env for track
         model = PurePursuitPolicy(track=track)
     elif model is None:
         # Only load model from path if not provided directly
@@ -215,9 +215,6 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
                 
                 total_reward += reward
                 step_count += 1
-                
-                # Optional: Add a small delay for better visualization
-                time.sleep(0.01)
             
             # Episode completed
             episode_time = time.time() - episode_start_time
@@ -406,18 +403,26 @@ def create_vec_env(env_kwargs, seed, num_envs=1, use_domain_randomization=False)
         if use_domain_randomization:
             # Sample parameters randomly for this environment instance
             rng = np.random.default_rng(rank_seed)
-            current_env_kwargs['mu'] = rng.uniform(0.7, 1.3) # Example range
-            current_env_kwargs['C_Sf'] = rng.uniform(3.0, 6.0)
-            current_env_kwargs['C_Sr'] = rng.uniform(3.0, 6.0)
-            # Add more parameter randomization here (mass, inertia, lengths, etc.)
+            current_env_kwargs['mu'] = rng.uniform(0.6, 1.1)
+            current_env_kwargs['C_Sf'] = rng.uniform(4.0, 5.5)
+            current_env_kwargs['C_Sr'] = rng.uniform(4.0, 5.5)
             current_env_kwargs['m'] = rng.uniform(3.0, 4.5)
             current_env_kwargs['I'] = rng.uniform(0.03, 0.06)
-            current_env_kwargs['lidar_noise_stddev'] = rng.uniform(0.0, 0.02) # Example range
-            # Randomize push probabilities, keeping average push = 1
-            sampled_push_0_prob = rng.uniform(0.1, 0.4) # Sample p0
+            current_env_kwargs['lidar_noise_stddev'] = rng.uniform(0.0, 0.01)
+            current_env_kwargs['s_noise_stddev'] = rng.uniform(0.0, 0.01)
+            current_env_kwargs['ey_noise_stddev'] = rng.uniform(0.0, 0.01)
+            current_env_kwargs['vel_noise_stddev'] = rng.uniform(0.0, 0.01)
+            current_env_kwargs['yaw_noise_stddev'] = rng.uniform(0.0, 0.01)
+            sampled_push_0_prob = rng.uniform(0.0, 0.01)
             current_env_kwargs['push_0_prob'] = sampled_push_0_prob
-            current_env_kwargs['push_2_prob'] = sampled_push_0_prob # Set p2 = p0
-
+            current_env_kwargs['push_2_prob'] = sampled_push_0_prob
+            
+        logging.info(
+            f"Env Parameters: mu: {current_env_kwargs['mu']}, C_Sf: {current_env_kwargs['C_Sf']}, C_Sr: {current_env_kwargs['C_Sr']}, m: {current_env_kwargs['m']}, I: {current_env_kwargs['I']}; "
+            f"Observation noise: lidar_noise_stddev: {current_env_kwargs['lidar_noise_stddev']}, s: {current_env_kwargs['s_noise_stddev']}, ey: {current_env_kwargs['ey_noise_stddev']}, vel: {current_env_kwargs['vel_noise_stddev']}, yaw: {current_env_kwargs['yaw_noise_stddev']}; "
+            f"Push probabilities: push_0_prob: {current_env_kwargs['push_0_prob']}, push_2_prob: {current_env_kwargs['push_2_prob']}"
+        )
+        
         # Create the thunk (function) for this env instance
         # Use partial to pass the potentially modified kwargs
         env_fn = partial(make_env(env_id=f"f110-rank{i}", rank=i, seed=seed, env_kwargs=current_env_kwargs))
