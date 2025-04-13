@@ -8,6 +8,7 @@ from functools import partial
 import os
 import time
 import numpy as np
+import datetime
 
 from rl_env import F110GymWrapper # Import the wrapper
 
@@ -107,16 +108,21 @@ def create_sac(env, seed):
     )
     return model
 
-def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm="SAC", num_episodes=5):
+def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm="SAC", num_episodes=5, model=None):
     """
     Evaluates a trained model or wall-following policy on the environment.
     
     Args:
-        eval_env: The environment (single instance) to evaluate in
-        model_path: Path to the saved model (ignored when algorithm is WALL_FOLLOW or PURE_PURSUIT)
+        eval_env: The environment (single instance or VecEnv) to evaluate in
+        model_path: Path to the saved model (ignored when algorithm is WALL_FOLLOW, PURE_PURSUIT, or if model is provided)
         algorithm: Algorithm type (SAC, PPO, DDPG, TD3, WALL_FOLLOW, PURE_PURSUIT)
         num_episodes: Number of episodes to evaluate
+        model: Optional pre-loaded model object (takes precedence over model_path)
     """
+    # Check if eval_env is a VecEnv
+    is_vec_env = isinstance(eval_env, (DummyVecEnv, SubprocVecEnv))
+    num_envs = eval_env.num_envs if is_vec_env else 1
+    
     if algorithm == "WALL_FOLLOW":
         from wall_follow import WallFollowPolicy
         logging.info("Using wall-following policy for evaluation")
@@ -125,9 +131,13 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
         from pure_pursuit import PurePursuitPolicy
         logging.info("Using pure pursuit policy for evaluation")
         # Get track from the environment if available
-        track = getattr(eval_env.unwrapped, 'track', None) # Access unwrapped env for track
+        if is_vec_env:
+            track = eval_env.get_attr("track", indices=0)[0]  # Get track from first env
+        else:
+            track = getattr(eval_env.unwrapped, 'track', None)  # Access unwrapped env for track
         model = PurePursuitPolicy(track=track)
-    else:
+    elif model is None:
+        # Only load model from path if not provided directly
         logging.info(f"Loading {algorithm} model from {model_path}")
         
         # Load the appropriate model based on algorithm type
@@ -143,61 +153,87 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
             raise ValueError(f"Unsupported algorithm: {algorithm}")
     
         logging.info("Model loaded successfully")
+    else:
+        logging.info("Using provided model for evaluation")
     
     # Initialize metrics
     episode_rewards = []
     episode_lengths = []
     lap_times = []
     
-    # Run evaluation episodes
-    for episode in range(num_episodes):
-        logging.info(f"Starting evaluation episode {episode+1}/{num_episodes}")
-        obs = eval_env.reset()
+    # Run evaluation episodes for each environment
+    for env_idx in range(num_envs):
+        logging.info(f"Evaluating on environment {env_idx+1}/{num_envs}")
         
-        # Reset the policy if needed
-        if hasattr(model, 'reset'):
-            model.reset()
-        
-        terminated = False
-        truncated = False
-        total_reward = 0
-        step_count = 0
-        episode_start_time = time.time()
-        
-        while not (terminated or truncated):
-            # Render environment
-            eval_env.render()
+        for episode in range(num_episodes):
+            logging.info(f"Starting evaluation episode {episode+1}/{num_episodes} on env {env_idx+1}")
             
-            # Get action from model
-            # Extract the observation for a single environment from the batch
-            single_obs = obs[0] if isinstance(obs, np.ndarray) and obs.ndim > 1 else obs
-            action, _states = model.predict(single_obs, deterministic=True)
+            # Reset the environment
+            if is_vec_env:
+                obs = eval_env.env_method('reset', indices=[env_idx])[0][0]  # Reset specific env
+                # Wrap single obs in list to match expected format
+                obs = np.array([obs])
+            else:
+                obs = eval_env.reset()
             
-            # Take step in environment
-            # Gymnasium envs return 5 values
-            obs, reward, terminated, truncated, info = eval_env.step(action)
+            # Reset the policy if needed
+            if hasattr(model, 'reset'):
+                model.reset()
             
-            total_reward += reward
-            step_count += 1
+            terminated = False
+            truncated = False
+            total_reward = 0
+            step_count = 0
+            episode_start_time = time.time()
             
-            # Optional: Add a small delay for better visualization
-            time.sleep(0.01)
-        
-        # Episode completed
-        episode_time = time.time() - episode_start_time
-        
-        # Record metrics
-        episode_rewards.append(total_reward)
-        episode_lengths.append(step_count)
-        lap_times.append(episode_time)
-        
-        logging.info(f"Episode {episode+1} finished:")
-        logging.info(f"  Reward: {total_reward:.2f}")
-        logging.info(f"  Length: {step_count} steps")
-        logging.info(f"  Time: {episode_time:.2f} seconds")
-        
-        # Reset for next episode
-        print(f"Episode {episode+1} finished. Resetting...")
+            while not (terminated or truncated):
+                # Render environment - only render the current environment
+                if is_vec_env:
+                    eval_env.env_method('render', indices=[env_idx])
+                else:
+                    eval_env.render()
+                
+                # Get action from model
+                # Extract the observation for a single environment from the batch
+                single_obs = obs[0] if isinstance(obs, np.ndarray) and obs.ndim > 1 else obs
+                action, _states = model.predict(single_obs, deterministic=True)
+                
+                # Take step in environment
+                if is_vec_env:
+                    # Step only the current environment
+                    obs, reward, terminated, truncated, info = eval_env.env_method(
+                        'step', action, indices=[env_idx]
+                    )[0]
+                    # Wrap outputs to match expected format
+                    obs = np.array([obs])
+                    terminated = bool(terminated)
+                    truncated = bool(truncated)
+                    reward = float(reward)
+                else:
+                    # Gymnasium envs return 5 values
+                    obs, reward, terminated, truncated, info = eval_env.step(action)
+                
+                total_reward += reward
+                step_count += 1
+                
+                # Optional: Add a small delay for better visualization
+                time.sleep(0.01)
+            
+            # Episode completed
+            episode_time = time.time() - episode_start_time
+            
+            # Record metrics
+            episode_rewards.append(total_reward)
+            episode_lengths.append(step_count)
+            lap_times.append(episode_time)
+            
+            logging.info(f"Episode {episode+1} finished:")
+            logging.info(f"  Reward: {total_reward:.2f}")
+            logging.info(f"  Length: {step_count} steps")
+            logging.info(f"  Time: {episode_time:.2f} seconds")
+            
+            # Reset for next episode
+            print(f"Episode {episode+1} finished. Resetting...")
     
     # Compute summary statistics
     mean_reward = np.mean(episode_rewards)
@@ -205,7 +241,7 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
     mean_episode_length = np.mean(episode_lengths)
     mean_lap_time = np.mean(lap_times)
     
-    logging.info(f"Evaluation completed over {num_episodes} episodes:")
+    logging.info(f"Evaluation completed over {num_episodes * num_envs} episodes across {num_envs} environments:")
     logging.info(f"  Mean reward: {mean_reward:.2f} ± {std_reward:.2f}")
     logging.info(f"  Mean episode length: {mean_episode_length:.2f} steps")
     logging.info(f"  Mean lap time: {mean_lap_time:.2f} seconds")
@@ -237,7 +273,7 @@ def initialize_with_imitation_learning(model, env, imitation_policy_type="PURE_P
         TypeError: If env is not a VecEnv instance
     """
     # Check if env is a VecEnv and raise an error if it's not
-    if not isinstance(env, (SubprocVecEnv)):
+    if not isinstance(env, (DummyVecEnv,SubprocVecEnv)):
         raise TypeError("env must be a VecEnv instance")
 
     # Import policies for imitation learning
@@ -276,7 +312,6 @@ def initialize_with_imitation_learning(model, env, imitation_policy_type="PURE_P
     logging.info(f"Collecting {total_transitions} transitions across {env.num_envs} environments")
     
     while collected_transitions < total_transitions:
-        env.render(mode='human')
         # Generate expert actions for each environment
         actions = []
         for i in range(env.num_envs):
@@ -349,19 +384,18 @@ def make_env(env_id, rank, seed=0, env_kwargs=None):
     # set_global_seeds(seed) # Deprecated in SB3
     return _init
 
-# Updated train function to handle VecEnv and Domain Randomization
-def train(env_kwargs, seed, num_envs=1, use_domain_randomization=False, use_imitation_learning=True, imitation_policy_type="PURE_PURSUIT", algorithm="SAC"):
+def create_vec_env(env_kwargs, seed, num_envs=1, use_domain_randomization=False):
     """
-    Trains the RL model.
+    Creates vectorized environments for training and evaluation.
 
     Args:
         env_kwargs (dict): Base arguments for the F110GymWrapper environment.
         seed (int): Random seed.
         num_envs (int): Number of parallel environments to use.
         use_domain_randomization (bool): Whether to randomize environment parameters.
-        use_imitation_learning (bool): Whether to use imitation learning before RL.
-        imitation_policy_type (str): Policy for imitation learning.
-        algorithm (str): RL algorithm to use (e.g., SAC, PPO).
+
+    Returns:
+        VecEnv: The vectorized environment.
     """
     # --- Create Environment(s) ---
     env_fns = []
@@ -393,6 +427,22 @@ def train(env_kwargs, seed, num_envs=1, use_domain_randomization=False, use_imit
     vec_env_cls = DummyVecEnv if num_envs == 1 else SubprocVecEnv
     env = vec_env_cls(env_fns)
     
+    return env
+
+# Updated train function to handle VecEnv and Domain Randomization
+def train(env, seed, num_envs=1, use_domain_randomization=False, use_imitation_learning=True, imitation_policy_type="PURE_PURSUIT", algorithm="SAC"):
+    """
+    Trains the RL model.
+
+    Args:
+        env: Vectorized environment for training.
+        seed (int): Random seed.
+        num_envs (int): Number of parallel environments to use.
+        use_domain_randomization (bool): Whether to randomize environment parameters.
+        use_imitation_learning (bool): Whether to use imitation learning before RL.
+        imitation_policy_type (str): Policy for imitation learning.
+        algorithm (str): RL algorithm to use (e.g., SAC, PPO).
+    """
     # --- Create Model ---
     if algorithm == "PPO":
         model = create_ppo(env, seed)
@@ -415,24 +465,67 @@ def train(env_kwargs, seed, num_envs=1, use_domain_randomization=False, use_imit
     logging.info(f"Starting RL training with {env.num_envs} environments.")
 
     # --- RL Training ---
-    # Create a separate VecEnv for evaluation using the base (non-randomized) params
-    eval_env_fn = partial(make_env(env_id="f110-eval", rank=0, seed=seed + 1000, env_kwargs=env_kwargs))
-    eval_vec_env = DummyVecEnv([eval_env_fn]) # Single env for standard evaluation
+    # Create formatted path based on training parameters and timestamp
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    model_dir_name = f"{algorithm}_envs{num_envs}_dr{int(use_domain_randomization)}_il{int(use_imitation_learning)}"
+    if use_imitation_learning:
+        model_dir_name += f"_{imitation_policy_type}"
+    model_dir_name += f"_seed{seed}_{timestamp}"
+    
+    # Create the full paths
+    best_model_path = os.path.join("./logs", model_dir_name, "best_model")
+    log_path = os.path.join("./logs", model_dir_name, "results")
+    
+    # Ensure the directories exist
+    os.makedirs(best_model_path, exist_ok=True)
+    os.makedirs(log_path, exist_ok=True)
 
-    eval_callback = EvalCallback(
-        eval_vec_env, # Use the non-randomized eval env
-        best_model_save_path="./logs/best_model",
-        log_path="./logs/results",
-        eval_freq=max(10000 // num_envs, 1), # Evaluate less frequently per env step
-        n_eval_episodes=5, # Standard number of eval episodes
-        deterministic=True,
-        render=False,
-        warn=False # Suppress warnings about eval_env mismatch if any
+    # Import callbacks for saving best model based on training rewards
+    from stable_baselines3.common.callbacks import CheckpointCallback, BaseCallback
+
+    # Custom callback to save model with highest training reward
+    class SaveOnBestTrainingRewardCallback(BaseCallback):
+        def __init__(self, check_freq, save_path, verbose=1):
+            super(SaveOnBestTrainingRewardCallback, self).__init__(verbose)
+            self.check_freq = check_freq
+            self.save_path = save_path
+            self.best_mean_reward = -float('inf')
+        
+        def _init_callback(self):
+            # Create folder if needed
+            if self.save_path is not None:
+                os.makedirs(self.save_path, exist_ok=True)
+        
+        def _on_step(self):
+            if self.n_calls % self.check_freq == 0:
+                # Get the mean episode reward from recent episodes
+                if len(self.model.ep_info_buffer) > 0:
+                    mean_reward = np.mean([ep_info["r"] for ep_info in self.model.ep_info_buffer])
+                    
+                    if self.verbose > 0:
+                        print(f"Num timesteps: {self.num_timesteps}")
+                        print(f"Mean training reward: {mean_reward:.2f}")
+                    
+                    # New best model, save it
+                    if mean_reward > self.best_mean_reward:
+                        self.best_mean_reward = mean_reward
+                        if self.verbose > 0:
+                            print(f"Saving new best model with mean reward: {mean_reward:.2f}")
+                        self.model.save(self.save_path)
+            
+            return True
+
+    # Create the callback
+    # Check frequency should be frequent enough to capture improvements but not too frequent
+    save_callback = SaveOnBestTrainingRewardCallback(
+        check_freq=max(1000 // num_envs, 1),
+        save_path=best_model_path,
+        verbose=1
     )
 
     model.learn(
         total_timesteps=10_000_000,
         log_interval=10, # Log less frequently for VecEnv
         reset_num_timesteps=True, # Start timesteps from 0
-        callback=eval_callback
+        callback=save_callback
     )

@@ -100,43 +100,26 @@ def main(argv):
         # Other DR parameters will be added in rl.py if enabled
     }
 
-    # Single environment for evaluation
-    eval_env = F110GymWrapper(
-        **base_env_kwargs, # Use base parameters
-        seed=FLAGS.seed,         
-        # Use default physics/noise/delay params for evaluation
-    )
-    
-    # # check waypoints
-    # map_path = config.map_dir + map_info[config.map_ind][1].split('.')[0] + '.png'
-    # with Image.open(map_path) as img:
-    #     img = img.transpose(Image.FLIP_TOP_BOTTOM)
-    # plt.figure(figsize=(8, 6))
-    # plt.imshow(img)
-    # for waypoint in track.waypoints:
-    #     color = plt.cm.viridis(waypoint[3])  # Normalize and map to colormap
-    #     plt.plot(waypoint[1] * 20, waypoint[2] * 20, 'o', color=color, markersize=abs(waypoint[3]))
-    # plt.title("Flipped Map with Track Waypoints")
-    # plt.show()
-    
-    # # test env
-    # test_env(env)
-
-    # train
-    # sk.rl.train(env)
-
     # Branch based on mode (train or evaluate)
+    # Create a vectorized environment
+    # We use the same env creation function as training for consistency
+    vec_env = stablebaseline3.rl.create_vec_env(
+        env_kwargs=base_env_kwargs,
+        seed=FLAGS.seed,
+        num_envs=FLAGS.num_envs,
+        use_domain_randomization=FLAGS.use_domain_randomization
+    )
     if FLAGS.eval_only:
         stablebaseline3.rl.evaluate(
-            eval_env=eval_env, # Use the single eval env
+            eval_env=vec_env,
             model_path=FLAGS.model_path,
             algorithm=FLAGS.algorithm,
             num_episodes=FLAGS.num_eval_episodes,
         )
     else:
-        # Original training code with the new parameter
-        stablebaseline3.rl.train(
-            env_kwargs=base_env_kwargs,
+        # Train with vectorized environments
+        model = stablebaseline3.rl.train(
+            env=vec_env,
             seed=FLAGS.seed,
             num_envs=FLAGS.num_envs,
             use_domain_randomization=FLAGS.use_domain_randomization,
