@@ -479,6 +479,10 @@ class RaceCar(object):
                             self.params['v_max']))
             # update state
             self.state = x
+            # Add check for invalid state values BEFORE converting to Frenet
+            if not np.all(np.isfinite(x)):
+                raise ValueError(f"Invalid state detected after dynamic_ST integration: {x}")
+
             if self.track is not None:
                 x_pose = self.track.cartesian_to_frenet(*x[[0, 1, 4]])
                 s_state = np.zeros(7)
@@ -582,7 +586,9 @@ class RaceCar(object):
         elif self.state[4] < 0:
             self.state[4] = self.state[4] + 2 * np.pi
         
-        
+        # Add final state check before converting to Frenet
+        if not np.all(np.isfinite(self.state)):
+            raise ValueError(f"Invalid final state before Frenet conversion: {self.state}")
         
         if self.track is not None:
             x = self.state.copy()

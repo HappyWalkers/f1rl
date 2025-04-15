@@ -79,7 +79,7 @@ class F110GymWrapper(gymnasium.Env):
             # drive_control_mode='acc',
             # steering_control_mode='vel',
             waypoints=waypoints,
-            timestep=0.03,
+            timestep=0.04,
         )
 
         # Update observation space: [s, ey, vel, yaw_angle] + lidar
@@ -185,7 +185,9 @@ class F110GymWrapper(gymnasium.Env):
 
         # --- Step Environment ---
         # Ensure action is the correct shape for the base env (expects batch dim)
+        logging.debug(f"action_to_execute: {action_to_execute}")
         obs, reward, done, info = self.env.step(action_to_execute.reshape((1, 2)))
+        logging.debug(f"obs: {obs}")
 
         truncated = False
         if self.current_step >= self._max_episode_steps:
@@ -206,7 +208,7 @@ class F110GymWrapper(gymnasium.Env):
         linear_velocity_reward = abs(linear_velocity) - 1
         collision_punishment = -1 if collision else 0
         angular_velocity_punishment = - abs(angular_velocity)
-        reward = progress_reward * 10 + safety_distance_reward * 0 + linear_velocity_reward * 1 + collision_punishment * 5000 + angular_velocity_punishment * 0 
+        reward = progress_reward * 10 + safety_distance_reward * 0 + linear_velocity_reward * 1 + collision_punishment * 1000 + angular_velocity_punishment * 0 
         
         logging.debug(f"step: {self.current_step}")
         logging.debug(f"linear velocity: {linear_velocity:.2f}")

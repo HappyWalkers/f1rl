@@ -417,11 +417,11 @@ def create_vec_env(env_kwargs, seed, num_envs=1, use_domain_randomization=False)
             current_env_kwargs['push_0_prob'] = sampled_push_0_prob
             current_env_kwargs['push_2_prob'] = sampled_push_0_prob
             
-        logging.info(
-            f"Env Parameters: mu: {current_env_kwargs['mu']}, C_Sf: {current_env_kwargs['C_Sf']}, C_Sr: {current_env_kwargs['C_Sr']}, m: {current_env_kwargs['m']}, I: {current_env_kwargs['I']}; "
-            f"Observation noise: lidar_noise_stddev: {current_env_kwargs['lidar_noise_stddev']}, s: {current_env_kwargs['s_noise_stddev']}, ey: {current_env_kwargs['ey_noise_stddev']}, vel: {current_env_kwargs['vel_noise_stddev']}, yaw: {current_env_kwargs['yaw_noise_stddev']}; "
-            f"Push probabilities: push_0_prob: {current_env_kwargs['push_0_prob']}, push_2_prob: {current_env_kwargs['push_2_prob']}"
-        )
+            logging.info(
+                f"Env Parameters: mu: {current_env_kwargs['mu']}, C_Sf: {current_env_kwargs['C_Sf']}, C_Sr: {current_env_kwargs['C_Sr']}, m: {current_env_kwargs['m']}, I: {current_env_kwargs['I']}; "
+                f"Observation noise: lidar_noise_stddev: {current_env_kwargs['lidar_noise_stddev']}, s: {current_env_kwargs['s_noise_stddev']}, ey: {current_env_kwargs['ey_noise_stddev']}, vel: {current_env_kwargs['vel_noise_stddev']}, yaw: {current_env_kwargs['yaw_noise_stddev']}; "
+                f"Push probabilities: push_0_prob: {current_env_kwargs['push_0_prob']}, push_2_prob: {current_env_kwargs['push_2_prob']}"
+            )
         
         # Create the thunk (function) for this env instance
         # Use partial to pass the potentially modified kwargs
@@ -524,7 +524,7 @@ def train(env, seed, num_envs=1, use_domain_randomization=False, use_imitation_l
     # Check frequency should be frequent enough to capture improvements but not too frequent
     save_callback = SaveOnBestTrainingRewardCallback(
         check_freq=max(1000 // num_envs, 1),
-        save_path=best_model_path,
+        save_path=os.path.join(best_model_path, "best_model"),
         verbose=1
     )
 
