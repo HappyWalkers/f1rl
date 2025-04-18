@@ -104,6 +104,23 @@ class F110GymWrapper(gymnasium.Env):
         self.last_frenet_arc_length = None
         self.last_lap_counts = 0
 
+    def get_env_params(self):
+        """Returns a dictionary of the current environment parameters."""
+        params = self.base_env_params.copy()
+        params.update({
+            'lidar_noise_stddev': self.lidar_noise_stddev,
+            's_noise_stddev': self.s_noise_stddev,
+            'ey_noise_stddev': self.ey_noise_stddev,
+            'vel_noise_stddev': self.vel_noise_stddev,
+            'yaw_noise_stddev': self.yaw_noise_stddev,
+            'push_0_prob': self.push_0_prob,
+            'push_2_prob': self.push_2_prob,
+            'push_1_prob': self.push_1_prob,
+            # Add any other parameters that might be randomized or relevant
+            # 'max_episode_steps': self._max_episode_steps # Example
+        })
+        return params
+
     def _process_observation(self, obs):
         """Processes the raw observation dict and applies noise."""
         lidar_scan = obs['scans'][0]

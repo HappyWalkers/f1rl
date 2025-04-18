@@ -2,4 +2,6 @@
 *tensorboard*
 *.zip
 *.tar.xz
-
+*.png
+*.pth
+*.h5
