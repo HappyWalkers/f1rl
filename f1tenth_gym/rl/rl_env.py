@@ -42,12 +42,14 @@ class F110GymWrapper(gymnasium.Env):
                  vel_noise_stddev=0.0,             # Noise std dev for velocity
                  yaw_noise_stddev=0.0,            # Noise std dev for yaw angle (radians)
                  push_0_prob=0, # Probability of pushing 0 times
-                 push_2_prob=0  # Probability of pushing 2 times
+                 push_2_prob=0,  # Probability of pushing 2 times
+                 include_params_in_obs=True        # Whether to include parameters in observation
                  ):
         super().__init__()
         self.track = track # Store track object
         self.seed = seed
         self.np_random, _ = gymnasium.utils.seeding.np_random(seed)
+        self.include_params_in_obs = include_params_in_obs
 
         # Store DR params
         self.lidar_noise_stddev = lidar_noise_stddev
@@ -79,19 +81,27 @@ class F110GymWrapper(gymnasium.Env):
             # drive_control_mode='acc',
             # steering_control_mode='vel',
             waypoints=waypoints,
-            timestep=0.04,
+            timestep=0.02,
         )
 
-        # Update observation space: [s, ey, vel, yaw_angle] + lidar
+        # Define the parameter vector dimensions
+        self.num_params = len(self.get_env_params_vector())
+        
+        # Update observation space: [s, ey, vel, yaw_angle] + lidar + params (if included)
         # low/high values are approximate, might need refinement
-        self.observation_space = spaces.Box(
-            low=np.concatenate(([-1000.0, -5.0, v_min, -np.pi], np.zeros(1080))),
-            high=np.concatenate(([1000.0, 5.0, v_max, np.pi], np.full(1080, 30.0))),
-            shape=(1084,), dtype=np.float32  # 4 state values + 1080 lidar points
-        )
-        # self.action_space = spaces.Box(
-        #     low=np.array([-3.2, 0.0]), high=np.array([3.2, 9.51]), shape=(2,), dtype=np.float32
-        # )
+        if self.include_params_in_obs:
+            self.observation_space = spaces.Box(
+                low=np.concatenate(([-1000.0, -5.0, v_min, -np.pi], np.zeros(1080), np.zeros(self.num_params))),
+                high=np.concatenate(([1000.0, 5.0, v_max, np.pi], np.full(1080, 30.0), np.ones(self.num_params) * 10.0)),
+                shape=(1084 + self.num_params,), dtype=np.float32  # 4 state values + 1080 lidar points + env params
+            )
+        else:
+            self.observation_space = spaces.Box(
+                low=np.concatenate(([-1000.0, -5.0, v_min, -np.pi], np.zeros(1080))),
+                high=np.concatenate(([1000.0, 5.0, v_max, np.pi], np.full(1080, 30.0))),
+                shape=(1084,), dtype=np.float32  # 4 state values + 1080 lidar points
+            )
+            
         # Action space: [Steering Angle, Speed]
         self.action_space = spaces.Box(
             low=np.array([s_min, 1.0]),  # Min speed slightly above 0
@@ -103,6 +113,32 @@ class F110GymWrapper(gymnasium.Env):
         self.waypoints = waypoints
         self.last_frenet_arc_length = None
         self.last_lap_counts = 0
+
+    def get_env_params_vector(self):
+        """Returns a vector of the current environment parameters for inclusion in observation."""
+        params = self.get_env_params()
+        # Convert dictionary to vector in a consistent order
+        param_vector = np.array([
+            params['mu'], params['C_Sf'], params['C_Sr'], 
+            params['lf'], params['lr'], params['h'], 
+            params['m'], params['I'],
+            params['lidar_noise_stddev'], params['s_noise_stddev'],
+            params['ey_noise_stddev'], params['vel_noise_stddev'],
+            params['yaw_noise_stddev'], params['push_0_prob'],
+            params['push_2_prob']
+        ], dtype=np.float32)
+        
+        # Normalize parameters to a reasonable range if needed
+        # This is important for neural networks to process them effectively
+        param_vector = param_vector / np.array([
+            1.0, 10.0, 10.0,  # mu, C_Sf, C_Sr
+            0.2, 0.2, 0.1,    # lf, lr, h
+            5.0, 0.1,         # m, I
+            0.05, 0.05, 0.05, 0.05, 0.05,  # noise stddevs
+            0.5, 0.5          # push probabilities
+        ])
+        
+        return param_vector
 
     def get_env_params(self):
         """Returns a dictionary of the current environment parameters."""
@@ -151,12 +187,20 @@ class F110GymWrapper(gymnasium.Env):
             lidar_scan += noise * lidar_scan
             lidar_scan = np.clip(lidar_scan, 0, 30.0) # Assuming max range is 30
 
-        # Combine all observation components with noise
-        processed_obs = np.concatenate((
+        # Base observation without environment parameters
+        base_obs = np.concatenate((
             [s, ey],  # Frenet coordinates with noise
             [vel, yaw_angle],  # Velocity and yaw angle with noise
             lidar_scan
         )).astype(np.float32)
+        
+        # Add environment parameters to observation if enabled
+        if self.include_params_in_obs:
+            env_params = self.get_env_params_vector()
+            processed_obs = np.concatenate((base_obs, env_params)).astype(np.float32)
+        else:
+            processed_obs = base_obs
+            
         return processed_obs
 
     def reset(self, seed=None, options=None):

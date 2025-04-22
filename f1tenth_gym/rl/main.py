@@ -40,8 +40,9 @@ flags.DEFINE_integer("num_eval_episodes", 5, "Number of episodes to evaluate")
 flags.DEFINE_boolean("use_imitation_learning", True, "Whether to use imitation learning before RL training")
 flags.DEFINE_enum("imitation_policy", "PURE_PURSUIT", ["WALL_FOLLOW", "PURE_PURSUIT"],
                   "Policy to use for imitation learning.")
-flags.DEFINE_integer("num_envs", 4, "Number of parallel environments for training")
-flags.DEFINE_boolean("use_domain_randomization", False, "Apply domain randomization during training")
+flags.DEFINE_integer("num_envs", 24, "Number of parallel environments for training")
+flags.DEFINE_boolean("use_domain_randomization", True, "Apply domain randomization during training")
+flags.DEFINE_boolean("include_params_in_obs", True, "Include environment parameters in observations for contextual RL")
 
 
 os.environ['F110GYM_PLOT_SCALE'] = str(60.)
@@ -96,6 +97,7 @@ def main(argv):
         'map_path': config.map_dir + map_info[config.map_ind][1].split('.')[0],
         'num_agents': FLAGS.num_agents,
         'track': track,
+        'include_params_in_obs': FLAGS.include_params_in_obs
         # seed will be handled by make_vec_env/make_env
         # Other DR parameters will be added in rl.py if enabled
     }
@@ -107,7 +109,8 @@ def main(argv):
         env_kwargs=base_env_kwargs,
         seed=FLAGS.seed,
         num_envs=FLAGS.num_envs,
-        use_domain_randomization=FLAGS.use_domain_randomization
+        use_domain_randomization=FLAGS.use_domain_randomization,
+        include_params_in_obs=FLAGS.include_params_in_obs
     )
     if FLAGS.eval_only:
         stablebaseline3.rl.evaluate(
@@ -118,14 +121,15 @@ def main(argv):
         )
     else:
         # Train with vectorized environments
-        model = stablebaseline3.rl.train(
+        stablebaseline3.rl.train(
             env=vec_env,
             seed=FLAGS.seed,
             num_envs=FLAGS.num_envs,
             use_domain_randomization=FLAGS.use_domain_randomization,
             use_imitation_learning=FLAGS.use_imitation_learning,
             imitation_policy_type=FLAGS.imitation_policy,
-            algorithm=FLAGS.algorithm
+            algorithm=FLAGS.algorithm,
+            include_params_in_obs=FLAGS.include_params_in_obs
         )
 
 

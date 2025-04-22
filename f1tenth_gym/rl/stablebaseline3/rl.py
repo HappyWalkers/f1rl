@@ -9,11 +9,195 @@ import os
 import time
 import numpy as np
 import datetime
+import torch
+import torch.nn as nn
+from typing import Dict, List, Tuple, Type, Union, Callable, Optional, Any
+from gym import spaces
+from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
+from tqdm import tqdm
 
 from rl_env import F110GymWrapper # Import the wrapper
 
 
-def create_ppo(env, seed):
+class F1TenthFeaturesExtractor(BaseFeaturesExtractor):
+    """
+    Custom feature extractor for the F1Tenth environment.
+    
+    This network separately processes state features, lidar scans, and environment parameters,
+    then combines them into a single feature vector.
+    """
+    def __init__(
+        self,
+        observation_space: spaces.Box,
+        features_dim: int = 1024,
+        state_dim: int = 4,
+        lidar_dim: int = 1080,
+        param_dim: int = 15, 
+        include_params: bool = True
+    ):
+        # Determine whether the observation includes parameters based on its dimension
+        self.state_dim = state_dim  # 4 state components: [s, ey, vel, yaw_angle]
+        self.lidar_dim = lidar_dim  # LiDAR points
+        self.param_dim = param_dim  # Environment parameters
+        self.include_params = include_params
+        
+        # The expected observation dimension with parameters included
+        expected_dim_with_params = state_dim + lidar_dim + param_dim
+        expected_dim_without_params = state_dim + lidar_dim
+        
+        # Check if observation space has the expected shape
+        obs_shape = observation_space.shape[0]
+        if include_params:
+            assert obs_shape == expected_dim_with_params, f"Expected observation dimension {expected_dim_with_params}, got {obs_shape}"
+        else:
+            assert obs_shape == expected_dim_without_params, f"Expected observation dimension {expected_dim_without_params}, got {obs_shape}"
+            
+        super().__init__(observation_space, features_dim)
+        
+        # Network for processing state variables (s, ey, vel, yaw_angle)
+        self.state_net = nn.Sequential(
+            nn.Linear(state_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU()
+        )
+        
+        # Network for processing LiDAR scan
+        # # Use dilated convolutions to capture patterns at multiple scales
+        # self.lidar_net = nn.Sequential(
+        #     # Reshape lidar to [batch, 1, lidar_dim]
+        #     Reshape((-1, 1, lidar_dim)),
+            
+        #     nn.Conv1d(in_channels=1, out_channels=16, kernel_size=3, dilation=1, padding=1),
+        #     nn.ReLU(),
+            
+        #     nn.Conv1d(in_channels=16, out_channels=32, kernel_size=3, dilation=2, padding=2),
+        #     nn.ReLU(),
+            
+        #     nn.Conv1d(in_channels=32, out_channels=64, kernel_size=3, dilation=4, padding=4),
+        #     nn.ReLU(),
+            
+        #     nn.Conv1d(in_channels=64, out_channels=32, kernel_size=3, dilation=8, padding=8),
+        #     nn.ReLU(),
+            
+        #     nn.Conv1d(in_channels=32, out_channels=16, kernel_size=3, dilation=16, padding=16),
+        #     nn.ReLU(),
+            
+        #     # Dimensionality reduction
+        #     nn.Conv1d(in_channels=16, out_channels=8, kernel_size=9, stride=8, padding=4),
+        #     nn.ReLU(),
+            
+        #     # Flatten the output
+        #     nn.Flatten(),
+            
+        #     # Fully connected layers
+        #     nn.Linear(8 * 135, 128),  # 1080/8 = 135
+        #     nn.ReLU(),
+        #     nn.Linear(128, 128),
+        #     nn.ReLU()
+        # )
+        # Pure MLP architecture for processing LiDAR data
+        self.lidar_net = nn.Sequential(
+            nn.Flatten(),
+            
+            nn.Linear(lidar_dim, 1024),
+            nn.ReLU(),
+            
+            nn.Linear(1024, 512),
+            nn.ReLU(),
+            
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            
+            nn.Linear(128, 128),
+            nn.ReLU()
+        )
+        
+        # Network for processing environment parameters (if included)
+        if include_params:
+            self.param_net = nn.Sequential(
+                nn.Linear(param_dim, 128),
+                nn.ReLU(),
+                nn.Linear(128, 128),
+                nn.ReLU()
+            )
+            # Combined dimension from all branches
+            combined_dim = 128 + 128 + 128  # state + lidar + param
+        else:
+            self.param_net = None
+            combined_dim = 128 + 128  # state + lidar
+        
+        # Final layers to combine all features
+        self.combined_net = nn.Sequential(
+            nn.Linear(combined_dim, features_dim),
+            nn.ReLU()
+        )
+
+    def forward(self, observations: torch.Tensor) -> torch.Tensor:
+        # Extract different components from observation
+        state_features = observations[:, :self.state_dim]
+        lidar_features = observations[:, self.state_dim:self.state_dim + self.lidar_dim]
+        
+        # Process state features
+        state_output = self.state_net(state_features)
+        
+        # Process lidar features
+        lidar_output = self.lidar_net(lidar_features)
+        
+        if self.include_params:
+            # Extract and process environment parameters
+            param_features = observations[:, self.state_dim + self.lidar_dim:]
+            param_output = self.param_net(param_features)
+            
+            # Combine all features
+            combined_features = torch.cat([state_output, lidar_output, param_output], dim=1)
+        else:
+            # Combine only state and lidar features
+            combined_features = torch.cat([state_output, lidar_output], dim=1)
+        
+        # Final processing
+        output = self.combined_net(combined_features)
+        return output
+
+
+class Reshape(nn.Module):
+    """
+    Helper module to reshape tensors.
+    """
+    def __init__(self, shape):
+        super().__init__()
+        self.shape = shape
+
+    def forward(self, x):
+        return x.reshape(self.shape)
+
+
+def create_ppo(env, seed, include_params_in_obs=True):
+    """Create a PPO model with custom neural network architecture"""
+    # Determine if the environment observation includes parameters
+    obs_dim = env.observation_space.shape[0]
+    lidar_dim = 1080
+    state_dim = 4
+    param_dim = 15
+    
+    # Define policy kwargs with custom feature extractor
+    policy_kwargs = {
+        "features_extractor_class": F1TenthFeaturesExtractor,
+        "features_extractor_kwargs": {
+            "features_dim": 256,
+            "state_dim": state_dim,
+            "lidar_dim": lidar_dim,
+            "param_dim": param_dim,
+            "include_params": include_params_in_obs
+        },
+        "net_arch": [
+            dict(pi=[256, 128, 64], vf=[256, 128, 64])
+        ]
+    }
+    
     model = PPO(
         policy="MlpPolicy",
         env=env,
@@ -33,11 +217,7 @@ def create_ppo(env, seed):
         sde_sample_freq=-1,
         target_kl=None,
         tensorboard_log="./ppo_tensorboard/",
-        policy_kwargs={
-            "net_arch": [
-                dict(pi=[256, 256, 256], vf=[256, 256, 256])
-            ]
-        },
+        policy_kwargs=policy_kwargs,
         verbose=1,
         seed=seed,
         device="auto",
@@ -45,44 +225,107 @@ def create_ppo(env, seed):
     )
     return model
 
-def create_ddpg(env, seed):
+def create_ddpg(env, seed, include_params_in_obs=True):
+    """Create a DDPG model with custom neural network architecture"""
+    # Determine if the environment observation includes parameters
+    obs_dim = env.observation_space.shape[0]
+    lidar_dim = 1080
+    state_dim = 4
+    param_dim = 15
+    
+    # Define policy kwargs with custom feature extractor
+    policy_kwargs = {
+        "features_extractor_class": F1TenthFeaturesExtractor,
+        "features_extractor_kwargs": {
+            "features_dim": 256,
+            "state_dim": state_dim,
+            "lidar_dim": lidar_dim,
+            "param_dim": param_dim,
+            "include_params": include_params_in_obs
+        },
+        "net_arch": [400, 300]
+    }
+    
     model = DDPG(
         policy="MlpPolicy",
         env=env,
         learning_rate=1e-3,
         buffer_size=1000000,
-        learning_starts=1000,
-        batch_size=64,
+        learning_starts=10000,
+        batch_size=128,
         tau=0.001,
         gamma=0.99,
         verbose=1,
         seed=seed,
+        policy_kwargs=policy_kwargs,
     )
     return model
 
-def create_td3(env, seed):
+def create_td3(env, seed, include_params_in_obs=True):
+    """Create a TD3 model with custom neural network architecture"""
+    # Determine if the environment observation includes parameters
+    obs_dim = env.observation_space.shape[0]
+    lidar_dim = 1080
+    state_dim = 4
+    param_dim = 15
+    
+    # Define policy kwargs with custom feature extractor
+    policy_kwargs = {
+        "features_extractor_class": F1TenthFeaturesExtractor,
+        "features_extractor_kwargs": {
+            "features_dim": 256,
+            "state_dim": state_dim,
+            "lidar_dim": lidar_dim,
+            "param_dim": param_dim,
+            "include_params": include_params_in_obs
+        },
+        "net_arch": [400, 300]
+    }
+    
     model = TD3(
         policy="MlpPolicy",
         env=env,
         learning_rate=1e-3,
         buffer_size=1000000,
-        learning_starts=1000,
-        batch_size=64,
+        learning_starts=10000,
+        batch_size=128,
         tau=0.001,
         gamma=0.99,
         verbose=1,
         seed=seed,
+        policy_kwargs=policy_kwargs,
     )
     return model
 
-def create_sac(env, seed):
+def create_sac(env, seed, include_params_in_obs=True):
+    """Create a SAC model with custom neural network architecture"""
+    # Determine if the environment observation includes parameters
+    obs_dim = env.observation_space.shape[0]
+    lidar_dim = 1080
+    state_dim = 4
+    param_dim = 15
+    
+    # Define policy kwargs with custom feature extractor
+    policy_kwargs = {
+        "features_extractor_class": F1TenthFeaturesExtractor,
+        "features_extractor_kwargs": {
+            "features_dim": 1024,
+            "state_dim": state_dim,
+            "lidar_dim": lidar_dim,
+            "param_dim": param_dim,
+            "include_params": include_params_in_obs
+        },
+        # Using a moderately sized network for actor and critic
+        "net_arch": [1024, 512, 256, 128, 64]
+    }
+    
     model = SAC(
         policy="MlpPolicy",
         env=env,
         learning_rate=3e-4,
         buffer_size=1_000_000,
         learning_starts=10000,
-        batch_size=1024,
+        batch_size=256,
         tau=0.005,
         gamma=0.99,
         train_freq=(10, "step"),
@@ -98,9 +341,7 @@ def create_sac(env, seed):
         sde_sample_freq=-1,
         use_sde_at_warmup=False,
         tensorboard_log="./sac_tensorboard/",
-        policy_kwargs={
-            "net_arch": [1024, 1024, 512, 512, 256, 256, 128, 128, 64, 64, 32, 32, 16, 16]
-        },
+        policy_kwargs=policy_kwargs,
         verbose=1,
         seed=seed,
         device="auto",
@@ -355,7 +596,14 @@ def initialize_with_imitation_learning(model, env, imitation_policy_type="PURE_P
             # This ensures the logger and other components are properly set up
             model.learn(total_timesteps=1, log_interval=1)
             # Now we can safely call train
-            model.train(gradient_steps=10_000, batch_size=model.batch_size)
+            gradient_steps = 10_000
+            # Create a progress bar for training
+            with tqdm(total=gradient_steps, desc="Imitation Learning Progress") as pbar:
+                for i in range(0, gradient_steps, 1):
+                    # Perform training step
+                    model.train(gradient_steps=1, batch_size=model.batch_size)
+                    # Update progress bar
+                    pbar.update(1)
 
     logging.info("Imitation learning completed")
     return model
@@ -381,7 +629,7 @@ def make_env(env_id, rank, seed=0, env_kwargs=None):
     # set_global_seeds(seed) # Deprecated in SB3
     return _init
 
-def create_vec_env(env_kwargs, seed, num_envs=1, use_domain_randomization=False):
+def create_vec_env(env_kwargs, seed, num_envs=1, use_domain_randomization=False, include_params_in_obs=True):
     """
     Creates vectorized environments for training and evaluation.
 
@@ -390,6 +638,7 @@ def create_vec_env(env_kwargs, seed, num_envs=1, use_domain_randomization=False)
         seed (int): Random seed.
         num_envs (int): Number of parallel environments to use.
         use_domain_randomization (bool): Whether to randomize environment parameters.
+        include_params_in_obs (bool): Whether to include environment parameters in observations.
 
     Returns:
         VecEnv: The vectorized environment.
@@ -399,6 +648,7 @@ def create_vec_env(env_kwargs, seed, num_envs=1, use_domain_randomization=False)
     for i in range(num_envs):
         rank_seed = seed + i
         current_env_kwargs = env_kwargs.copy()
+        current_env_kwargs['include_params_in_obs'] = include_params_in_obs
         
         if use_domain_randomization:
             # Sample parameters randomly for this environment instance
@@ -418,7 +668,7 @@ def create_vec_env(env_kwargs, seed, num_envs=1, use_domain_randomization=False)
             current_env_kwargs['push_2_prob'] = sampled_push_0_prob
             
             logging.info(
-                f"Env Parameters: mu: {current_env_kwargs['mu']}, C_Sf: {current_env_kwargs['C_Sf']}, C_Sr: {current_env_kwargs['C_Sr']}, m: {current_env_kwargs['m']}, I: {current_env_kwargs['I']}; "
+                f"Env {i} Parameters: mu: {current_env_kwargs['mu']}, C_Sf: {current_env_kwargs['C_Sf']}, C_Sr: {current_env_kwargs['C_Sr']}, m: {current_env_kwargs['m']}, I: {current_env_kwargs['I']}; "
                 f"Observation noise: lidar_noise_stddev: {current_env_kwargs['lidar_noise_stddev']}, s: {current_env_kwargs['s_noise_stddev']}, ey: {current_env_kwargs['ey_noise_stddev']}, vel: {current_env_kwargs['vel_noise_stddev']}, yaw: {current_env_kwargs['yaw_noise_stddev']}; "
                 f"Push probabilities: push_0_prob: {current_env_kwargs['push_0_prob']}, push_2_prob: {current_env_kwargs['push_2_prob']}"
             )
@@ -435,7 +685,7 @@ def create_vec_env(env_kwargs, seed, num_envs=1, use_domain_randomization=False)
     return env
 
 # Updated train function to handle VecEnv and Domain Randomization
-def train(env, seed, num_envs=1, use_domain_randomization=False, use_imitation_learning=True, imitation_policy_type="PURE_PURSUIT", algorithm="SAC"):
+def train(env, seed, num_envs=1, use_domain_randomization=False, use_imitation_learning=True, imitation_policy_type="PURE_PURSUIT", algorithm="SAC", include_params_in_obs=True):
     """
     Trains the RL model.
 
@@ -444,19 +694,20 @@ def train(env, seed, num_envs=1, use_domain_randomization=False, use_imitation_l
         seed (int): Random seed.
         num_envs (int): Number of parallel environments to use.
         use_domain_randomization (bool): Whether to randomize environment parameters.
-        use_imitation_learning (bool): Whether to use imitation learning before RL.
+        use_imitation_learning (bool): Whether to use imitation learning before RL training.
         imitation_policy_type (str): Policy for imitation learning.
         algorithm (str): RL algorithm to use (e.g., SAC, PPO).
+        include_params_in_obs (bool): Whether to include environment parameters in observations.
     """
     # --- Create Model ---
     if algorithm == "PPO":
-        model = create_ppo(env, seed)
+        model = create_ppo(env, seed, include_params_in_obs)
     elif algorithm == "DDPG":
-        model = create_ddpg(env, seed)
+        model = create_ddpg(env, seed, include_params_in_obs)
     elif algorithm == "TD3":
-        model = create_td3(env, seed)
+        model = create_td3(env, seed, include_params_in_obs)
     elif algorithm == "SAC":
-        model = create_sac(env, seed)
+        model = create_sac(env, seed, include_params_in_obs)
     else:
         raise ValueError(f"Unsupported algorithm: {algorithm}")
 
@@ -472,7 +723,7 @@ def train(env, seed, num_envs=1, use_domain_randomization=False, use_imitation_l
     # --- RL Training ---
     # Create formatted path based on training parameters and timestamp
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    model_dir_name = f"{algorithm}_envs{num_envs}_dr{int(use_domain_randomization)}_il{int(use_imitation_learning)}"
+    model_dir_name = f"{algorithm}_envs{num_envs}_dr{int(use_domain_randomization)}_il{int(use_imitation_learning)}_cp{int(include_params_in_obs)}_custom_net"
     if use_imitation_learning:
         model_dir_name += f"_{imitation_policy_type}"
     model_dir_name += f"_seed{seed}_{timestamp}"

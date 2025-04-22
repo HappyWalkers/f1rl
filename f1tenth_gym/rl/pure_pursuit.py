@@ -24,7 +24,7 @@ class PurePursuitPolicy:
         Implements the predict interface expected by the evaluate function
         
         Args:
-            observation: The environment observation [s, ey, vel, yaw_angle, yaw_rate, lidar_scan]
+            observation: The environment observation [s, ey, vel, yaw_angle, yaw_rate, lidar_scan, env_params(optional)]
             deterministic: Whether to use deterministic actions (ignored in pure pursuit)
             
         Returns:
@@ -32,6 +32,11 @@ class PurePursuitPolicy:
             _: None (to match the RL policy interface)
         """
         # Extract state from observation
+        # Check if the observation includes environment parameters based on length
+        # Standard observation has 1084 elements (4 + 1080 lidar)
+        # If longer, it includes environment parameters that we can ignore for this controller
+        
+        # Extract core observation elements regardless of whether env params are included
         current_s = observation[0]
         current_ey = observation[1]
         current_vel = observation[2]
