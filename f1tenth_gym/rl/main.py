@@ -31,18 +31,19 @@ FLAGS = flags.FLAGS
 
 flags.DEFINE_integer("seed", 42, "Random seed for reproducibility")
 flags.DEFINE_integer("map_index", 63, "Index of the map to use")
-flags.DEFINE_integer("num_agents", 1, "Number of agents")
+flags.DEFINE_integer("num_agents", 2, "Number of agents")
 flags.DEFINE_string("logging_level", "INFO", "Logging level")
 flags.DEFINE_boolean("eval_only", False, "Run only evaluation (no training)")
 flags.DEFINE_string("model_path", "./logs/best_model/best_model.zip", "Path to the model to evaluate")
 flags.DEFINE_string("algorithm", "SAC", "Algorithm used (SAC, PPO, DDPG, TD3, WALL_FOLLOW, PURE_PURSUIT)")
 flags.DEFINE_integer("num_eval_episodes", 5, "Number of episodes to evaluate")
-flags.DEFINE_boolean("use_imitation_learning", True, "Whether to use imitation learning before RL training")
+flags.DEFINE_boolean("use_imitation_learning", False, "Whether to use imitation learning before RL training")
 flags.DEFINE_enum("imitation_policy", "PURE_PURSUIT", ["WALL_FOLLOW", "PURE_PURSUIT"],
                   "Policy to use for imitation learning.")
 flags.DEFINE_integer("num_envs", 24, "Number of parallel environments for training")
-flags.DEFINE_boolean("use_domain_randomization", True, "Apply domain randomization during training")
-flags.DEFINE_boolean("include_params_in_obs", True, "Include environment parameters in observations for contextual RL")
+flags.DEFINE_boolean("use_domain_randomization", False, "Apply domain randomization during training")
+flags.DEFINE_boolean("include_params_in_obs", False, "Include environment parameters in observations for contextual RL")
+flags.DEFINE_boolean("racing_mode", True, "Enable racing mode with two cars")
 
 
 os.environ['F110GYM_PLOT_SCALE'] = str(60.)
@@ -97,7 +98,8 @@ def main(argv):
         'map_path': config.map_dir + map_info[config.map_ind][1].split('.')[0],
         'num_agents': FLAGS.num_agents,
         'track': track,
-        'include_params_in_obs': FLAGS.include_params_in_obs
+        'include_params_in_obs': FLAGS.include_params_in_obs,
+        'racing_mode': FLAGS.racing_mode
         # seed will be handled by make_vec_env/make_env
         # Other DR parameters will be added in rl.py if enabled
     }
@@ -110,7 +112,8 @@ def main(argv):
         seed=FLAGS.seed,
         num_envs=FLAGS.num_envs,
         use_domain_randomization=FLAGS.use_domain_randomization,
-        include_params_in_obs=FLAGS.include_params_in_obs
+        include_params_in_obs=FLAGS.include_params_in_obs,
+        racing_mode=FLAGS.racing_mode
     )
     if FLAGS.eval_only:
         stablebaseline3.rl.evaluate(
@@ -118,6 +121,7 @@ def main(argv):
             model_path=FLAGS.model_path,
             algorithm=FLAGS.algorithm,
             num_episodes=FLAGS.num_eval_episodes,
+            racing_mode=FLAGS.racing_mode
         )
     else:
         # Train with vectorized environments
@@ -129,7 +133,8 @@ def main(argv):
             use_imitation_learning=FLAGS.use_imitation_learning,
             imitation_policy_type=FLAGS.imitation_policy,
             algorithm=FLAGS.algorithm,
-            include_params_in_obs=FLAGS.include_params_in_obs
+            include_params_in_obs=FLAGS.include_params_in_obs,
+            racing_mode=FLAGS.racing_mode
         )
 
 

@@ -349,7 +349,7 @@ def create_sac(env, seed, include_params_in_obs=True):
     )
     return model
 
-def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm="SAC", num_episodes=5, model=None):
+def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm="SAC", num_episodes=5, model=None, racing_mode=False):
     """
     Evaluates a trained model or wall-following policy on the environment.
     
@@ -359,7 +359,24 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
         algorithm: Algorithm type (SAC, PPO, DDPG, TD3, WALL_FOLLOW, PURE_PURSUIT)
         num_episodes: Number of episodes to evaluate
         model: Optional pre-loaded model object (takes precedence over model_path)
+        racing_mode: Whether to evaluate in racing mode with two cars
     """
+    # Set racing mode in environment if needed and not already set
+    if racing_mode:
+        logging.info("Evaluating in racing mode with two cars")
+        # Try to set racing_mode in environment
+        if hasattr(eval_env, 'env_method'):
+            try:
+                # For vectorized environments
+                eval_env.env_method('set_racing_mode', racing_mode)
+            except:
+                logging.warning("Could not set racing_mode through env_method")
+        # If direct attribute access or method call is possible
+        elif hasattr(eval_env, 'set_racing_mode'):
+            eval_env.set_racing_mode(racing_mode)
+        elif hasattr(eval_env, 'racing_mode'):
+            eval_env.racing_mode = racing_mode
+            
     # Check if eval_env is a VecEnv
     is_vec_env = isinstance(eval_env, (DummyVecEnv, SubprocVecEnv))
     num_envs = eval_env.num_envs if is_vec_env else 1
@@ -629,7 +646,7 @@ def make_env(env_id, rank, seed=0, env_kwargs=None):
     # set_global_seeds(seed) # Deprecated in SB3
     return _init
 
-def create_vec_env(env_kwargs, seed, num_envs=1, use_domain_randomization=False, include_params_in_obs=True):
+def create_vec_env(env_kwargs, seed, num_envs=1, use_domain_randomization=False, include_params_in_obs=True, racing_mode=False):
     """
     Creates vectorized environments for training and evaluation.
 
@@ -639,6 +656,7 @@ def create_vec_env(env_kwargs, seed, num_envs=1, use_domain_randomization=False,
         num_envs (int): Number of parallel environments to use.
         use_domain_randomization (bool): Whether to randomize environment parameters.
         include_params_in_obs (bool): Whether to include environment parameters in observations.
+        racing_mode (bool): Whether to use racing mode with two cars.
 
     Returns:
         VecEnv: The vectorized environment.
@@ -649,6 +667,10 @@ def create_vec_env(env_kwargs, seed, num_envs=1, use_domain_randomization=False,
         rank_seed = seed + i
         current_env_kwargs = env_kwargs.copy()
         current_env_kwargs['include_params_in_obs'] = include_params_in_obs
+        
+        # Ensure racing_mode is passed to environment
+        if 'racing_mode' not in current_env_kwargs:
+            current_env_kwargs['racing_mode'] = racing_mode
         
         if use_domain_randomization:
             # Sample parameters randomly for this environment instance
@@ -685,7 +707,7 @@ def create_vec_env(env_kwargs, seed, num_envs=1, use_domain_randomization=False,
     return env
 
 # Updated train function to handle VecEnv and Domain Randomization
-def train(env, seed, num_envs=1, use_domain_randomization=False, use_imitation_learning=True, imitation_policy_type="PURE_PURSUIT", algorithm="SAC", include_params_in_obs=True):
+def train(env, seed, num_envs=1, use_domain_randomization=False, use_imitation_learning=True, imitation_policy_type="PURE_PURSUIT", algorithm="SAC", include_params_in_obs=True, racing_mode=False):
     """
     Trains the RL model.
 
@@ -698,6 +720,7 @@ def train(env, seed, num_envs=1, use_domain_randomization=False, use_imitation_l
         imitation_policy_type (str): Policy for imitation learning.
         algorithm (str): RL algorithm to use (e.g., SAC, PPO).
         include_params_in_obs (bool): Whether to include environment parameters in observations.
+        racing_mode (bool): Whether to train in racing mode with two cars.
     """
     # --- Create Model ---
     if algorithm == "PPO":
@@ -723,7 +746,7 @@ def train(env, seed, num_envs=1, use_domain_randomization=False, use_imitation_l
     # --- RL Training ---
     # Create formatted path based on training parameters and timestamp
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    model_dir_name = f"{algorithm}_envs{num_envs}_dr{int(use_domain_randomization)}_il{int(use_imitation_learning)}_cp{int(include_params_in_obs)}_custom_net"
+    model_dir_name = f"{algorithm}_envs{num_envs}_dr{int(use_domain_randomization)}_il{int(use_imitation_learning)}_cp{int(include_params_in_obs)}_racing{int(racing_mode)}"
     if use_imitation_learning:
         model_dir_name += f"_{imitation_policy_type}"
     model_dir_name += f"_seed{seed}_{timestamp}"

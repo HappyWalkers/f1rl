@@ -7,6 +7,7 @@ import random
 from absl import logging
 from utils.Track import Track # Added import
 import collections
+from pure_pursuit import PurePursuitPolicy # Added import for opponent policy
 
 
 class F110GymWrapper(gymnasium.Env):
@@ -17,6 +18,9 @@ class F110GymWrapper(gymnasium.Env):
                  num_agents, 
                  track: Track,
                  max_episode_steps=10000,
+                 # Racing Mode
+                 racing_mode=False,
+                 opponent_policy_type="PURE_PURSUIT",
                  # Domain Randomization Params
                  mu=0.6,                         # Friction coefficient
                  C_Sf=4.718,                        # Cornering stiffness coefficient, front
@@ -50,6 +54,21 @@ class F110GymWrapper(gymnasium.Env):
         self.seed = seed
         self.np_random, _ = gymnasium.utils.seeding.np_random(seed)
         self.include_params_in_obs = include_params_in_obs
+        
+        # Racing mode settings
+        self.racing_mode = racing_mode
+        self.opponent_policy_type = opponent_policy_type
+        self.opponent_policy = None
+        self.opponent_obs = None
+        self.min_distance_between_cars = 1.0  # Minimum safe distance between cars at reset
+        self.rl_agent_idx = 1 if racing_mode else 0  # In racing mode, RL agent is idx 1
+        
+        # Set number of agents based on racing mode
+        if racing_mode and num_agents < 2:
+            logging.info("Setting num_agents to 2 for racing mode")
+            self.num_agents = 2
+        else:
+            self.num_agents = num_agents
 
         # Store DR params
         self.lidar_noise_stddev = lidar_noise_stddev
@@ -77,7 +96,7 @@ class F110GymWrapper(gymnasium.Env):
             params=self.base_env_params,
             map=map_path,
             seed=seed,
-            num_agents=num_agents,
+            num_agents=self.num_agents,
             # drive_control_mode='acc',
             # steering_control_mode='vel',
             waypoints=waypoints,
@@ -113,6 +132,19 @@ class F110GymWrapper(gymnasium.Env):
         self.waypoints = waypoints
         self.last_frenet_arc_length = None
         self.last_lap_counts = 0
+        
+        # Initialize opponent policy if in racing mode
+        if self.racing_mode:
+            self._initialize_opponent_policy()
+
+    def _initialize_opponent_policy(self):
+        """Initialize the opponent policy based on the specified type"""
+        if self.opponent_policy_type == "PURE_PURSUIT":
+            self.opponent_policy = PurePursuitPolicy(self.track)
+            logging.info("Initialized Pure Pursuit policy for opponent")
+        else:
+            logging.warning(f"Unknown opponent policy type: {self.opponent_policy_type}, defaulting to Pure Pursuit")
+            self.opponent_policy = PurePursuitPolicy(self.track)
 
     def get_env_params_vector(self):
         """Returns a vector of the current environment parameters for inclusion in observation."""
@@ -157,13 +189,24 @@ class F110GymWrapper(gymnasium.Env):
         })
         return params
 
-    def _process_observation(self, obs):
-        """Processes the raw observation dict and applies noise."""
-        lidar_scan = obs['scans'][0]
+    def _process_observation(self, obs, agent_idx=None):
+        """
+        Processes the raw observation dict and applies noise.
+        
+        Args:
+            obs: Raw observation dictionary
+            agent_idx: Index of the agent whose observation to process. 
+                       If None and in racing mode, uses self.rl_agent_idx.
+                       If None and not in racing mode, uses 0.
+        """
+        if agent_idx is None:
+            agent_idx = self.rl_agent_idx if self.racing_mode else 0
+            
+        lidar_scan = obs['scans'][agent_idx]
 
         # Get the state components
-        s, ey = obs["state_frenet"][0][0:2]  # Frenet coordinates
-        vel, yaw_angle = obs['state'][0][3:5]  # Velocity and yaw angle
+        s, ey = obs["state_frenet"][agent_idx][0:2]  # Frenet coordinates
+        vel, yaw_angle = obs['state'][agent_idx][3:5]  # Velocity and yaw angle
 
         # Apply noise to state components
         if self.s_noise_stddev > 0:
@@ -209,57 +252,145 @@ class F110GymWrapper(gymnasium.Env):
         self.current_step = 0
         self.last_frenet_arc_length = None
         self.action_buffer.clear() # Clear action buffer on reset
-
+        
+        # Store observation for opponent in racing mode
+        if self.racing_mode:
+            self.opponent_obs = self._process_observation(obs, agent_idx=0)
+        
+        # Return processed observation for RL agent
         processed_obs = self._process_observation(obs)
         return processed_obs, {}
 
     def get_reset_pose(self):
-        starting_idx = random.sample(range(len(self.waypoints)), 1)
-        x, y = self.waypoints[starting_idx][0, 1], self.waypoints[starting_idx][0, 2]
-        theta_noise = (2*random.random() - 1) * 0.1
-        theta = self.waypoints[starting_idx][0, 3] + theta_noise
-        starting_pos = np.array([[x, y, theta]])
-        return starting_pos
+        """
+        Get the reset poses for all agents.
+        
+        In racing mode:
+        - Places opponent (agent 0) at a random position on the track
+        - Places RL agent (agent 1) behind the opponent with a safe distance
+        
+        In non-racing mode:
+        - Places a single agent at a random position
+        
+        Returns:
+            starting_poses: numpy array of shape (num_agents, 3) with [x, y, theta] for each agent
+        """
+        if not self.racing_mode:
+            # Original single-agent code
+            starting_idx = random.sample(range(len(self.waypoints)), 1)
+            x, y = self.waypoints[starting_idx][0, 1], self.waypoints[starting_idx][0, 2]
+            theta_noise = (2*random.random() - 1) * 0.1
+            theta = self.waypoints[starting_idx][0, 3] + theta_noise
+            starting_pos = np.array([[x, y, theta]])
+            return starting_pos
+        else:
+            # Racing mode: place two cars
+            starting_poses = np.zeros((self.num_agents, 3))
+            
+            # Place opponent (agent 0) at random position
+            opponent_idx = random.sample(range(len(self.waypoints)), 1)
+            x_opponent = self.waypoints[opponent_idx][0, 1]
+            y_opponent = self.waypoints[opponent_idx][0, 2]
+            theta_opponent = self.waypoints[opponent_idx][0, 3]
+            starting_poses[0] = [x_opponent, y_opponent, theta_opponent]
+            
+            # Calculate position for RL agent (agent 1) behind opponent
+            # Get s-position of opponent
+            s_opponent = self.waypoints[opponent_idx][0, 0]
+            
+            # Place RL agent at a position behind the opponent
+            s_agent = (s_opponent - self.min_distance_between_cars) % self.track.s_frame_max
+            
+            # Convert back to cartesian coordinates
+            x_agent, y_agent, theta_agent = self.track.frenet_to_cartesian(s_agent, 0, 0)
+            
+            # Add small noise to prevent cars from being exactly aligned
+            lateral_noise = (2*random.random() - 1) * 0.1
+            theta_noise = (2*random.random() - 1) * 0.05
+            
+            # Apply noise to RL agent's position
+            x_agent += lateral_noise * np.sin(theta_agent + np.pi/2)
+            y_agent += lateral_noise * np.cos(theta_agent + np.pi/2)
+            theta_agent += theta_noise
+            
+            starting_poses[1] = [x_agent, y_agent, theta_agent]
+            
+            return starting_poses
 
     def step(self, action):
         self.current_step += 1
 
-        # --- Action Queuing Logic ---
-        # Add the new action to the buffer based on queue state
-        if not self.action_buffer: # If queue is empty
-            self.action_buffer.append(action.copy())
-            self.action_buffer.append(action.copy())
-        else:
-            # Push 0, 1, or 2 times with average 1
-            num_pushes = self.np_random.choice([0, 1, 2], p=[self.push_0_prob, self.push_1_prob, self.push_2_prob])
-            for _ in range(num_pushes):
+        if self.racing_mode:
+            # In racing mode, we need to get the opponent's action
+            opponent_action, _ = self.opponent_policy.predict(self.opponent_obs)
+            
+            # Combine RL agent's action with opponent's action
+            combined_actions = np.zeros((self.num_agents, 2))
+            combined_actions[0] = opponent_action  # Opponent
+            combined_actions[1] = action  # RL agent
+            
+            # --- Action Queuing Logic for RL agent only ---
+            if not self.action_buffer:  # If queue is empty
                 self.action_buffer.append(action.copy())
-        
-        # --- Action Execution Logic ---
-        # Get the action to execute: oldest from queue or current if empty
-        if self.action_buffer:
-            action_to_execute = self.action_buffer.popleft()
+                self.action_buffer.append(action.copy())
+            else:
+                # Push 0, 1, or 2 times with average 1
+                num_pushes = self.np_random.choice([0, 1, 2], p=[self.push_0_prob, self.push_1_prob, self.push_2_prob])
+                for _ in range(num_pushes):
+                    self.action_buffer.append(action.copy())
+            
+            # Get the action to execute for RL agent
+            if self.action_buffer:
+                combined_actions[1] = self.action_buffer.popleft()
+            
+            # Step the environment with combined actions
+            obs, reward, done, info = self.env.step(combined_actions)
+            
+            # Update opponent observation for next step
+            self.opponent_obs = self._process_observation(obs, agent_idx=0)
+            
         else:
-            # Fallback: use the current action if queue is empty
-            logging.warning("Action buffer empty, executing current action.")
-            action_to_execute = action.copy()
+            # Original single-agent code
+            # --- Action Queuing Logic ---
+            # Add the new action to the buffer based on queue state
+            if not self.action_buffer:  # If queue is empty
+                self.action_buffer.append(action.copy())
+                self.action_buffer.append(action.copy())
+            else:
+                # Push 0, 1, or 2 times with average 1
+                num_pushes = self.np_random.choice([0, 1, 2], p=[self.push_0_prob, self.push_1_prob, self.push_2_prob])
+                for _ in range(num_pushes):
+                    self.action_buffer.append(action.copy())
+            
+            # --- Action Execution Logic ---
+            # Get the action to execute: oldest from queue or current if empty
+            if self.action_buffer:
+                action_to_execute = self.action_buffer.popleft()
+            else:
+                # Fallback: use the current action if queue is empty
+                logging.warning("Action buffer empty, executing current action.")
+                action_to_execute = action.copy()
 
-        # --- Step Environment ---
-        # Ensure action is the correct shape for the base env (expects batch dim)
-        logging.debug(f"action_to_execute: {action_to_execute}")
-        obs, reward, done, info = self.env.step(action_to_execute.reshape((1, 2)))
+            # --- Step Environment ---
+            # Ensure action is the correct shape for the base env (expects batch dim)
+            logging.debug(f"action_to_execute: {action_to_execute}")
+            obs, reward, done, info = self.env.step(action_to_execute.reshape((1, 2)))
+
         logging.debug(f"obs: {obs}")
 
         truncated = False
         if self.current_step >= self._max_episode_steps:
             truncated = True
 
-        linear_velocity = obs["linear_vels_x"][0]
-        frenet_arc_length = obs["state_frenet"][0][0]
-        frenet_lateral_offset = obs["state_frenet"][0][1]
-        collision = obs["collisions"][0]
-        angular_velocity = obs["ang_vels_z"][0]
-        lap_counts = obs['lap_counts'][0]
+        # Get values for RL agent (agent 1 in racing mode, agent 0 otherwise)
+        agent_idx = self.rl_agent_idx if self.racing_mode else 0
+        linear_velocity = obs["linear_vels_x"][agent_idx]
+        frenet_arc_length = obs["state_frenet"][agent_idx][0]
+        frenet_lateral_offset = obs["state_frenet"][agent_idx][1]
+        collision = obs["collisions"][agent_idx]
+        angular_velocity = obs["ang_vels_z"][agent_idx]
+        lap_counts = obs['lap_counts'][agent_idx]
+        
         if (self.last_frenet_arc_length is not None and frenet_arc_length - self.last_frenet_arc_length < -10):
             self.last_frenet_arc_length = None
             
@@ -269,7 +400,18 @@ class F110GymWrapper(gymnasium.Env):
         linear_velocity_reward = abs(linear_velocity) - 1
         collision_punishment = -1 if collision else 0
         angular_velocity_punishment = - abs(angular_velocity)
-        reward = progress_reward * 10 + safety_distance_reward * 0 + linear_velocity_reward * 1 + collision_punishment * 1000 + angular_velocity_punishment * 0 
+        
+        # Adjust reward for racing scenario
+        if self.racing_mode:
+            # reward for overtaking the opponent
+            opponent_s = obs["state_frenet"][0][0]
+            agent_s = frenet_arc_length 
+            s_diff = agent_s - opponent_s
+            overtake_reward = np.tanh(s_diff)
+            reward = progress_reward * 10 + safety_distance_reward * 0 + linear_velocity_reward * 1 + collision_punishment * 1000 + angular_velocity_punishment * 0 + overtake_reward * 1
+        else:
+            # Original reward function for single-agent
+            reward = progress_reward * 10 + safety_distance_reward * 0 + linear_velocity_reward * 1 + collision_punishment * 1000 + angular_velocity_punishment * 0 
         
         logging.debug(f"step: {self.current_step}")
         logging.debug(f"linear velocity: {linear_velocity:.2f}")
@@ -280,10 +422,12 @@ class F110GymWrapper(gymnasium.Env):
         logging.debug(f"truncated: {truncated}")
         logging.debug(f"done: {done}")
         logging.debug(f"progress reward: {progress_reward:.2f}")
-        logging.debug(f"safety distance reward: {safety_distance_reward:.2f}") # Changed name back
+        logging.debug(f"safety distance reward: {safety_distance_reward:.2f}") 
         logging.debug(f"linear velocity reward: {linear_velocity_reward:.2f}")
         logging.debug(f"collision punishment: {collision_punishment:.2f}")
         logging.debug(f"angular velocity punishment: {angular_velocity_punishment:.2f}")
+        if self.racing_mode:
+            logging.debug(f"overtake reward: {overtake_reward:.2f}")
         logging.debug(f"total reward: {reward:.2f}")
 
         self.last_frenet_arc_length = frenet_arc_length
@@ -292,8 +436,13 @@ class F110GymWrapper(gymnasium.Env):
         # Process observation before returning
         processed_obs = self._process_observation(obs)
 
-        # Done condition includes collision
-        done = bool(done or collision)
+        # In racing mode, check for both cars' collisions
+        if self.racing_mode:
+            # Race is done if RL agent collides or either car completes the race
+            done = bool(done or collision or np.any(obs["collisions"]))
+        else:
+            # Original done condition
+            done = bool(done or collision)
 
         return processed_obs, reward, done, truncated, info # Gymnasium expects 5 return values
 
