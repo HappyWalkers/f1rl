@@ -355,8 +355,8 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
     
     Args:
         eval_env: The environment (single instance or VecEnv) to evaluate in
-        model_path: Path to the saved model (ignored when algorithm is WALL_FOLLOW, PURE_PURSUIT, or if model is provided)
-        algorithm: Algorithm type (SAC, PPO, DDPG, TD3, WALL_FOLLOW, PURE_PURSUIT)
+        model_path: Path to the saved model (ignored when algorithm is WALL_FOLLOW, PURE_PURSUIT, LATTICE, or if model is provided)
+        algorithm: Algorithm type (SAC, PPO, DDPG, TD3, WALL_FOLLOW, PURE_PURSUIT, LATTICE)
         num_episodes: Number of episodes to evaluate
         model: Optional pre-loaded model object (takes precedence over model_path)
         racing_mode: Whether to evaluate in racing mode with two cars
@@ -383,6 +383,15 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
         else:
             track = getattr(eval_env, 'track', None)  # Access unwrapped env for track
         model = PurePursuitPolicy(track=track)
+    elif algorithm == "LATTICE":
+        from lattice_planner import LatticePlannerPolicy
+        logging.info("Using lattice planner policy for evaluation")
+        # Get track from the environment if available
+        if is_vec_env:
+            track = eval_env.get_attr("track", indices=0)[0]  # Get track from first env
+        else:
+            track = getattr(eval_env, 'track', None)  # Access unwrapped env for track
+        model = LatticePlannerPolicy(track=track)
     elif model is None:
         # Only load model from path if not provided directly
         logging.info(f"Loading {algorithm} model from {model_path}")

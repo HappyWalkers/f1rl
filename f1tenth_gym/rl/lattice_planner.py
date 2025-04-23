@@ -8,31 +8,31 @@ class LatticePlannerPolicy:
     Generates multiple potential trajectories (lattice) and selects the optimal one.
     Designed to handle overtaking scenarios in racing.
     """
-    def __init__(self, track: Track, num_trajectories=7, planning_horizon=2.0, wheelbase=0.33):
+    def __init__(self, track: Track, num_trajectories=20, planning_horizon=10.0):
         # Configuration
         self.track = track
         self.num_trajectories = num_trajectories  # Number of lateral trajectories to consider
         self.planning_horizon = planning_horizon  # How far ahead to plan in s coordinate
-        self.wheelbase = wheelbase  # Distance between front and rear axles
+        self.planning_resolution = 200
         
         # Trajectory parameters
-        self.lateral_offsets = np.linspace(-0.8, 0.8, num_trajectories)  # Lateral offset options
+        self.lateral_offsets = np.linspace(-2, 2, num_trajectories)  # Lateral offset options
         
         # Speed control
-        self.max_speed = 5.0
+        self.max_speed = 8.0
         self.min_speed = 0.5
-        self.max_accel = 3.0
-        self.max_decel = 5.0
         
         # Obstacle parameters
-        self.min_obstacle_distance = 0.5  # Minimum distance to maintain from obstacles
-        self.obstacle_detection_range = 10.0  # Range to detect obstacles in lidar
+        self.obstacle_view_angle = np.pi / 4
+        self.obstacle_detection_range = 1.0  # Increased range to detect obstacles in lidar
+        self.min_obstacle_separation = 0.3  # Minimum separation between obstacle points to be considered different obstacles
+        self.max_obstacles = 3  # Maximum number of obstacles to track
         
         # Cost weights
-        self.w_deviation = 1.0  # Weight for centerline deviation
-        self.w_velocity = 2.0   # Weight for velocity (higher is better)
+        self.w_deviation = 0.0  # Weight for centerline deviation
+        self.w_velocity = 1.0   # Weight for velocity (higher is better)
         self.w_obstacle = 5.0   # Weight for obstacle avoidance (higher is safer)
-        self.w_smoothness = 1.5 # Weight for trajectory smoothness
+        self.w_smoothness = 1.0 # Weight for trajectory smoothness
         
         logging.info(f"Lattice Planner initialized with {num_trajectories} trajectory options")
     
@@ -58,7 +58,7 @@ class LatticePlannerPolicy:
         lidar_scan = observation[4:1084]
         
         # Detect obstacles using lidar
-        opponent_detected, opponent_distance, opponent_angle = self._detect_opponent(lidar_scan)
+        obstacles = self._detect_opponent(lidar_scan)
         
         # Generate candidate trajectories
         trajectories = self._generate_trajectories(current_s, current_ey, current_vel, current_yaw)
@@ -69,9 +69,7 @@ class LatticePlannerPolicy:
             current_s, 
             current_ey, 
             current_vel,
-            opponent_detected, 
-            opponent_distance, 
-            opponent_angle
+            obstacles
         )
         
         # Extract control inputs from best trajectory
@@ -90,41 +88,57 @@ class LatticePlannerPolicy:
     
     def _detect_opponent(self, lidar_scan):
         """
-        Detect opponent car using lidar scan
+        Detect multiple obstacles using lidar scan in all directions
         
         Args:
             lidar_scan: 1080 length lidar scan
             
         Returns:
-            opponent_detected: Boolean indicating if opponent is detected
-            opponent_distance: Distance to opponent if detected
-            opponent_angle: Angle to opponent if detected
+            obstacles: List of detected obstacles, each with [distance, angle, estimated_s, estimated_ey]
         """
-        # For simplicity, we'll assume any close points in front are the opponent
-        # Real implementation would need better clustering/tracking
-        angle_inc = 2 * np.pi / len(lidar_scan)
-        angles = np.arange(len(lidar_scan)) * angle_inc - np.pi
+        angle_inc = 1.5 * np.pi / len(lidar_scan)
+        angles = np.arange(len(lidar_scan)) * angle_inc - 0.75 * np.pi
         
-        # Filter points in front of the car (within ±45 degrees)
-        front_indices = np.where(np.abs(angles) < np.pi/4)[0]
-        front_scan = lidar_scan[front_indices]
-        front_angles = angles[front_indices]
+        # Filter points based on wider view angle (180 degrees)
+        view_indices = np.where(np.abs(angles) < self.obstacle_view_angle)[0]
+        view_scan = lidar_scan[view_indices]
+        view_angles = angles[view_indices]
         
-        # Find closest point within a reasonable range
-        close_points = np.where((front_scan < self.obstacle_detection_range) & 
-                               (front_scan > 0.1))[0]  # Exclude very close points (likely noise)
+        # Find all points within detection range
+        close_points_indices = np.where((view_scan < self.obstacle_detection_range) & 
+                                       (view_scan > 0.1))[0]  # Exclude very close points (likely noise)
         
-        if len(close_points) > 0:
-            # Find closest point
-            min_idx = np.argmin(front_scan[close_points])
-            min_distance = front_scan[close_points][min_idx]
-            min_angle = front_angles[close_points][min_idx]
+        obstacles = []
+        
+        if len(close_points_indices) > 0:
+            # Sort by distance to process closest obstacles first
+            sorted_indices = close_points_indices[np.argsort(view_scan[close_points_indices])]
             
-            # If point is close enough, consider it an opponent
-            if min_distance < self.obstacle_detection_range:
-                return True, min_distance, min_angle
+            # Iterate through detected points and cluster into obstacles
+            for idx in sorted_indices:
+                if len(obstacles) >= self.max_obstacles:
+                    break
+                
+                distance = view_scan[idx]
+                angle = view_angles[idx]
+                
+                # Skip if this point is too close to an existing obstacle (i.e., part of the same obstacle)
+                is_new_obstacle = True
+                for obs in obstacles:
+                    # Calculate distance between this point and existing obstacle in polar coordinates
+                    dx = distance * np.cos(angle) - obs[0] * np.cos(obs[1])
+                    dy = distance * np.sin(angle) - obs[0] * np.sin(obs[1])
+                    if np.sqrt(dx**2 + dy**2) < self.min_obstacle_separation:
+                        is_new_obstacle = False
+                        break
+                
+                # If this is a new obstacle, add it to the list
+                if is_new_obstacle:
+                    # Store [distance, angle, estimated_s, estimated_ey]
+                    # Note: s and ey will be filled in _evaluate_trajectories based on current position
+                    obstacles.append([distance, angle, None, None])
         
-        return False, None, None
+        return obstacles
     
     def _generate_trajectories(self, current_s, current_ey, current_vel, current_yaw):
         """
@@ -144,7 +158,7 @@ class LatticePlannerPolicy:
         # Create sample points along s
         s_points = np.linspace(current_s, 
                               (current_s + self.planning_horizon) % self.track.s_frame_max, 
-                              20)
+                              self.planning_resolution)
         
         for target_offset in self.lateral_offsets:
             # Generate a trajectory that smoothly transitions from current offset to target
@@ -168,15 +182,14 @@ class LatticePlannerPolicy:
             
         return trajectories
     
-    def _evaluate_trajectories(self, trajectories, current_s, current_ey, current_vel, 
-                              opponent_detected, opponent_distance, opponent_angle):
+    def _evaluate_trajectories(self, trajectories, current_s, current_ey, current_vel, obstacles):
         """
         Evaluate all trajectories and select the best one based on cost function
         
         Args:
             trajectories: List of candidate trajectories
             current_s, current_ey, current_vel: Current state
-            opponent_detected, opponent_distance, opponent_angle: Opponent info
+            obstacles: List of detected obstacles [distance, angle, estimated_s, estimated_ey]
             
         Returns:
             best_trajectory: Selected trajectory
@@ -184,6 +197,18 @@ class LatticePlannerPolicy:
         """
         best_cost = float('inf')
         best_trajectory = None
+        
+        # First, calculate the estimated s and ey for each obstacle (if not already calculated)
+        for obstacle in obstacles:
+            if obstacle[2] is None or obstacle[3] is None:  # If s and ey not yet calculated
+                # Convert from polar to frenet coordinates
+                distance, angle = obstacle[0], obstacle[1]
+                # Estimate obstacle's position in frenet coordinates
+                obstacle_s_est = current_s + distance * np.cos(angle)
+                obstacle_ey_est = current_ey + distance * np.sin(angle)
+                # Update the obstacle with estimated coordinates
+                obstacle[2] = obstacle_s_est
+                obstacle[3] = obstacle_ey_est
         
         for traj in trajectories:
             # Calculate various costs
@@ -193,19 +218,43 @@ class LatticePlannerPolicy:
             # 2. Velocity cost - reward for higher speeds
             velocity_cost = -np.mean(traj['v_points']) * self.w_velocity
             
-            # 3. Obstacle cost - high penalty for trajectories close to opponent
+            # 3. Obstacle cost - high penalty for trajectories close to any obstacle
             obstacle_cost = 0
-            if opponent_detected:
-                # Estimate opponent's position in frenet coordinates
-                opponent_s_est = current_s + opponent_distance * np.cos(opponent_angle)
-                opponent_ey_est = current_ey + opponent_distance * np.sin(opponent_angle)
-                
-                # Check if any point in trajectory is too close to estimated opponent position
+            
+            if obstacles:  # If there are any obstacles
+                # For each point in the trajectory
                 for i, s in enumerate(traj['s_points']):
-                    dist_to_opponent = np.sqrt((s - opponent_s_est)**2 + 
-                                              (traj['ey_points'][i] - opponent_ey_est)**2)
-                    if dist_to_opponent < self.min_obstacle_distance:
-                        obstacle_cost += (self.min_obstacle_distance - dist_to_opponent) * self.w_obstacle
+                    ey = traj['ey_points'][i]
+                    
+                    # Calculate minimum distance to any obstacle from this trajectory point
+                    min_dist_to_obstacle = float('inf')
+                    
+                    for obstacle in obstacles:
+                        # Get obstacle coordinates
+                        obstacle_s, obstacle_ey = obstacle[2], obstacle[3]
+                        
+                        # Use s-coordinate distance (considering track loop)
+                        s_diff = min(
+                            abs(s - obstacle_s),
+                            abs(s - obstacle_s + self.track.s_frame_max),
+                            abs(s - obstacle_s - self.track.s_frame_max)
+                        )
+                        
+                        # Calculate Euclidean distance in frenet space
+                        dist_to_obstacle = np.sqrt(s_diff**2 + (ey - obstacle_ey)**2)
+                        
+                        # Remember minimum distance
+                        min_dist_to_obstacle = min(min_dist_to_obstacle, dist_to_obstacle)
+                    
+                    # Add cost inversely proportional to minimum distance
+                    # Using a safety threshold to heavily penalize very close approaches
+                    safety_threshold = 0.5
+                    if min_dist_to_obstacle < safety_threshold:
+                        # Exponential cost increase as distance approaches zero
+                        obstacle_cost += (1.0 / max(0.1, min_dist_to_obstacle)) * self.w_obstacle
+                    else:
+                        # Linear cost for distances beyond safety threshold
+                        obstacle_cost += (1.0 / min_dist_to_obstacle) * self.w_obstacle * 0.5
             
             # 4. Smoothness cost - penalize rapid changes in lateral position
             ey_diffs = np.diff(traj['ey_points'])

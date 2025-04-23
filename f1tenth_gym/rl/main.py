@@ -35,7 +35,7 @@ flags.DEFINE_integer("num_agents", 2, "Number of agents")
 flags.DEFINE_string("logging_level", "INFO", "Logging level")
 flags.DEFINE_boolean("eval", False, "Run only evaluation (no training)")
 flags.DEFINE_string("model_path", "./logs/best_model/best_model.zip", "Path to the model to evaluate")
-flags.DEFINE_string("algorithm", "SAC", "Algorithm used (SAC, PPO, DDPG, TD3, WALL_FOLLOW, PURE_PURSUIT)")
+flags.DEFINE_string("algorithm", "SAC", "Algorithm used (SAC, PPO, DDPG, TD3, WALL_FOLLOW, PURE_PURSUIT, LATTICE)")
 flags.DEFINE_integer("num_eval_episodes", 5, "Number of episodes to evaluate")
 flags.DEFINE_boolean("use_il", False, "Whether to use imitation learning before RL training")
 flags.DEFINE_enum("il_policy", "PURE_PURSUIT", ["WALL_FOLLOW", "PURE_PURSUIT", "LATTICE"],

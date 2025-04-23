@@ -17,7 +17,7 @@ class F110GymWrapper(gymnasium.Env):
                  map_path, 
                  num_agents, 
                  track: Track,
-                 max_episode_steps=10000,
+                 max_episode_steps=1000,
                  # Racing Mode
                  racing_mode=False,
                  opponent_policy_type="PURE_PURSUIT",
@@ -60,7 +60,7 @@ class F110GymWrapper(gymnasium.Env):
         self.opponent_policy_type = opponent_policy_type
         self.opponent_policy = None
         self.opponent_obs = None
-        self.min_distance_between_cars = 1.0  # Minimum safe distance between cars at reset
+        self.min_distance_between_cars = 2.0  # Minimum safe distance between cars at reset
         self.rl_agent_idx = 0 if racing_mode else 0 # In racing mode, RL agent is idx 0
         
         # Set number of agents based on racing mode
