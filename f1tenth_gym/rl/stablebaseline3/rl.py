@@ -364,18 +364,7 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
     # Set racing mode in environment if needed and not already set
     if racing_mode:
         logging.info("Evaluating in racing mode with two cars")
-        # Try to set racing_mode in environment
-        if hasattr(eval_env, 'env_method'):
-            try:
-                # For vectorized environments
-                eval_env.env_method('set_racing_mode', racing_mode)
-            except:
-                logging.warning("Could not set racing_mode through env_method")
-        # If direct attribute access or method call is possible
-        elif hasattr(eval_env, 'set_racing_mode'):
-            eval_env.set_racing_mode(racing_mode)
-        elif hasattr(eval_env, 'racing_mode'):
-            eval_env.racing_mode = racing_mode
+        eval_env.racing_mode = racing_mode
             
     # Check if eval_env is a VecEnv
     is_vec_env = isinstance(eval_env, (DummyVecEnv, SubprocVecEnv))
@@ -746,18 +735,14 @@ def train(env, seed, num_envs=1, use_domain_randomization=False, use_imitation_l
     # --- RL Training ---
     # Create formatted path based on training parameters and timestamp
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    model_dir_name = f"{algorithm}_envs{num_envs}_dr{int(use_domain_randomization)}_il{int(use_imitation_learning)}_cp{int(include_params_in_obs)}_racing{int(racing_mode)}"
+    model_dir_name = f"{algorithm}_envs{num_envs}_dr{int(use_domain_randomization)}_il{int(use_imitation_learning)}_crl{int(include_params_in_obs)}_racing{int(racing_mode)}"
     if use_imitation_learning:
         model_dir_name += f"_{imitation_policy_type}"
     model_dir_name += f"_seed{seed}_{timestamp}"
     
     # Create the full paths
     best_model_path = os.path.join("./logs", model_dir_name, "best_model")
-    log_path = os.path.join("./logs", model_dir_name, "results")
-    
-    # Ensure the directories exist
     os.makedirs(best_model_path, exist_ok=True)
-    os.makedirs(log_path, exist_ok=True)
 
     # Import callbacks for saving best model based on training rewards
     from stable_baselines3.common.callbacks import CheckpointCallback, BaseCallback
@@ -798,7 +783,7 @@ def train(env, seed, num_envs=1, use_domain_randomization=False, use_imitation_l
     # Check frequency should be frequent enough to capture improvements but not too frequent
     save_callback = SaveOnBestTrainingRewardCallback(
         check_freq=max(1000 // num_envs, 1),
-        save_path=os.path.join(best_model_path, "best_model"),
+        save_path=best_model_path,
         verbose=1
     )
 

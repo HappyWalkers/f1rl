@@ -266,8 +266,11 @@ class F110GymWrapper(gymnasium.Env):
         Get the reset poses for all agents.
         
         In racing mode:
-        - Places opponent (agent 0) at a random position on the track
-        - Places RL agent (agent 1) behind the opponent with a safe distance
+        - Randomly selects one of four starting scenarios:
+          1. RL agent behind the opponent (original behavior)
+          2. RL agent in front of the opponent
+          3. RL agent at the side of opponent 
+          4. (low probability) Random positions for both cars
         
         In non-racing mode:
         - Places a single agent at a random position
@@ -287,22 +290,65 @@ class F110GymWrapper(gymnasium.Env):
             # Racing mode: place two cars
             starting_poses = np.zeros((self.num_agents, 3))
             
-            # Place opponent (agent 0) at random position
+            # Choose scenario (4th scenario has lower probability)
+            scenario = random.choices([1, 2, 3, 4], weights=[0.35, 0.35, 0.25, 0.05])[0]
+            
+            if scenario == 4:
+                # Scenario 4: Random positions for both cars
+                # Pick two random positions making sure they're not too close
+                indices = []
+                while len(indices) < 2:
+                    idx = random.randrange(len(self.waypoints))
+                    if not indices or abs(self.waypoints[idx][0, 0] - self.waypoints[indices[0]][0, 0]) > self.min_distance_between_cars:
+                        indices.append(idx)
+                
+                # Set opponent position
+                starting_poses[0] = [
+                    self.waypoints[indices[0]][0, 1],  # x
+                    self.waypoints[indices[0]][0, 2],  # y
+                    self.waypoints[indices[0]][0, 3]   # theta
+                ]
+                
+                # Set RL agent position
+                starting_poses[1] = [
+                    self.waypoints[indices[1]][0, 1],  # x
+                    self.waypoints[indices[1]][0, 2],  # y
+                    self.waypoints[indices[1]][0, 3]   # theta
+                ]
+                
+                # Add small noise to prevent cars from being exactly aligned
+                noise = lambda: (2*random.random() - 1) * 0.1
+                starting_poses[0, 2] += noise() * 0.05  # Small theta noise for opponent
+                starting_poses[1, 2] += noise() * 0.05  # Small theta noise for RL agent
+                
+                return starting_poses
+            
+            # For scenarios 1-3, first place opponent at random position
             opponent_idx = random.sample(range(len(self.waypoints)), 1)
             x_opponent = self.waypoints[opponent_idx][0, 1]
             y_opponent = self.waypoints[opponent_idx][0, 2]
             theta_opponent = self.waypoints[opponent_idx][0, 3]
             starting_poses[0] = [x_opponent, y_opponent, theta_opponent]
             
-            # Calculate position for RL agent (agent 1) behind opponent
             # Get s-position of opponent
             s_opponent = self.waypoints[opponent_idx][0, 0]
             
-            # Place RL agent at a position behind the opponent
-            s_agent = (s_opponent - self.min_distance_between_cars) % self.track.s_frame_max
-            
-            # Convert back to cartesian coordinates
-            x_agent, y_agent, theta_agent = self.track.frenet_to_cartesian(s_agent, 0, 0)
+            if scenario == 1:
+                # Scenario 1: RL agent behind opponent (original behavior)
+                s_agent = (s_opponent - self.min_distance_between_cars) % self.track.s_frame_max
+                x_agent, y_agent, theta_agent = self.track.frenet_to_cartesian(s_agent, 0, 0)
+                
+            elif scenario == 2:
+                # Scenario 2: RL agent in front of opponent
+                s_agent = (s_opponent + self.min_distance_between_cars) % self.track.s_frame_max
+                x_agent, y_agent, theta_agent = self.track.frenet_to_cartesian(s_agent, 0, 0)
+                
+            elif scenario == 3:
+                # Scenario 3: RL agent at the side of opponent
+                # Use same s-coordinate but with lateral offset
+                s_agent = s_opponent
+                lateral_offset = random.choice([-0.5, 0.5])  # Left or right side
+                x_agent, y_agent, theta_agent = self.track.frenet_to_cartesian(s_agent, lateral_offset, 0)
             
             # Add small noise to prevent cars from being exactly aligned
             lateral_noise = (2*random.random() - 1) * 0.1
