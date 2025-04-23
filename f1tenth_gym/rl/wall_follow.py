@@ -23,7 +23,7 @@ class WallFollowPolicy:
         self.desired_distance = desired_distance
         self.angle_min = -2.35  # From LiDAR configuration
         self.angle_increment = 0.00435  # From LiDAR configuration
-        self.looking_ahead_distance = 2.0  # Look-ahead for smoother control
+        self.looking_ahead_distance = 1.0  # Look-ahead for smoother control
         
         logging.info("Wall following policy initialized")
         
@@ -180,7 +180,7 @@ class WallFollowPolicy:
         
         # Map the factor to speed range: 1.5 (cautious) to 6.0 (fast)
         min_speed = 1.5
-        max_speed = 8.0
+        max_speed = 6.0
         speed = max_speed - combined_factor * (max_speed - min_speed)
         
         return speed
