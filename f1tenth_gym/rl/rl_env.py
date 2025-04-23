@@ -291,7 +291,7 @@ class F110GymWrapper(gymnasium.Env):
             starting_poses = np.zeros((self.num_agents, 3))
             
             # Choose scenario (4th scenario has lower probability)
-            scenario = random.choices([1, 2, 3, 4], weights=[0.4, 0.1, 0.4, 0.1])[0]
+            scenario = random.choices([1, 2, 3, 4], weights=[0.8, 0.1, 0.0, 0.1])[0]
             
             if scenario == 4:
                 # Scenario 4: Random positions for both cars

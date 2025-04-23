@@ -38,7 +38,7 @@ flags.DEFINE_string("model_path", "./logs/best_model/best_model.zip", "Path to t
 flags.DEFINE_string("algorithm", "SAC", "Algorithm used (SAC, PPO, DDPG, TD3, WALL_FOLLOW, PURE_PURSUIT)")
 flags.DEFINE_integer("num_eval_episodes", 5, "Number of episodes to evaluate")
 flags.DEFINE_boolean("use_il", False, "Whether to use imitation learning before RL training")
-flags.DEFINE_enum("il_policy", "PURE_PURSUIT", ["WALL_FOLLOW", "PURE_PURSUIT"],
+flags.DEFINE_enum("il_policy", "PURE_PURSUIT", ["WALL_FOLLOW", "PURE_PURSUIT", "LATTICE"],
                   "Policy to use for imitation learning.")
 flags.DEFINE_integer("num_envs", 24, "Number of parallel environments for training")
 flags.DEFINE_boolean("use_dr", False, "Apply domain randomization during training")

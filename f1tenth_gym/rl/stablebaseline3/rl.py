@@ -500,15 +500,16 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
         "lap_times": lap_times
     }
 
-def initialize_with_imitation_learning(model, env, imitation_policy_type="PURE_PURSUIT", total_transitions=1000_000):
+def initialize_with_imitation_learning(model, env, imitation_policy_type="PURE_PURSUIT", total_transitions=1000_000, racing_mode=False):
     """
     Initialize a reinforcement learning model using imitation learning from a specified policy.
     
     Args:
         model: The RL model to initialize
         env: The environment (must be a VecEnv) to collect demonstrations from.
-        imitation_policy_type: Type of imitation policy (WALL_FOLLOW or PURE_PURSUIT)
+        imitation_policy_type: Type of imitation policy (WALL_FOLLOW, PURE_PURSUIT, or LATTICE)
         total_transitions: Total number of transitions to collect across all environments
+        racing_mode: Whether to use racing mode with two cars for overtaking scenarios
     
     Returns:
         model: The initialized model
@@ -523,20 +524,26 @@ def initialize_with_imitation_learning(model, env, imitation_policy_type="PURE_P
     # Import policies for imitation learning
     from wall_follow import WallFollowPolicy
     from pure_pursuit import PurePursuitPolicy
+    from lattice_planner import LatticePlannerPolicy
 
     # Initialize the expert policies for each environment
-    logging.info(f"Starting imitation learning from {imitation_policy_type} policy")
+    logging.info(f"Starting imitation learning from {imitation_policy_type} policy (racing_mode={racing_mode})")
     expert_policies = []
     for i in range(env.num_envs):
+        # Extract the track for this environment
+        track = env.get_attr("track", indices=i)[0]
+        # Ensure the environment has the track object needed by the policies
+        if not track:
+            raise ValueError("Environment does not have a 'track' attribute required for policy imitation.")
+            
         if imitation_policy_type == "WALL_FOLLOW":
             expert_policies.append(WallFollowPolicy())
         elif imitation_policy_type == "PURE_PURSUIT":
-            # Extract the track for this environment
-            track = env.get_attr("track", indices=i)[0]
-            # Ensure the environment has the track object needed by PurePursuit
-            if not track:
-                raise ValueError("Environment does not have a 'track' attribute required for PURE_PURSUIT imitation.")
             expert_policies.append(PurePursuitPolicy(track=track))
+        elif imitation_policy_type == "LATTICE":
+            if not racing_mode:
+                logging.warning("LATTICE planner is designed for racing mode. Using it in non-racing mode may not be optimal.")
+            expert_policies.append(LatticePlannerPolicy(track=track))
         else:
             raise ValueError(f"Unsupported imitation_policy_type: {imitation_policy_type}")
 
@@ -726,7 +733,7 @@ def train(env, seed, num_envs=1, use_domain_randomization=False, use_imitation_l
     # --- Imitation Learning (Optional, might need adaptation for VecEnv) ---
     if use_imitation_learning:
         logging.info("Using imitation learning to bootstrap the model.")
-        model = initialize_with_imitation_learning(model, env, imitation_policy_type=imitation_policy_type)
+        model = initialize_with_imitation_learning(model, env, imitation_policy_type=imitation_policy_type, racing_mode=racing_mode)
     else:
         logging.info("Skipping imitation learning.")
 
