@@ -61,7 +61,7 @@ class F110GymWrapper(gymnasium.Env):
         self.opponent_policy = None
         self.opponent_obs = None
         self.min_distance_between_cars = 1.0  # Minimum safe distance between cars at reset
-        self.rl_agent_idx = 1 if racing_mode else 0  # In racing mode, RL agent is idx 1
+        self.rl_agent_idx = 0 if racing_mode else 0 # In racing mode, RL agent is idx 0
         
         # Set number of agents based on racing mode
         if racing_mode and num_agents < 2:
@@ -253,9 +253,9 @@ class F110GymWrapper(gymnasium.Env):
         self.last_frenet_arc_length = None
         self.action_buffer.clear() # Clear action buffer on reset
         
-        # Store observation for opponent in racing mode
+        # Store observation for opponent in racing mode (now index 1)
         if self.racing_mode:
-            self.opponent_obs = self._process_observation(obs, agent_idx=0)
+            self.opponent_obs = self._process_observation(obs, agent_idx=1)
         
         # Return processed observation for RL agent
         processed_obs = self._process_observation(obs)
@@ -302,15 +302,15 @@ class F110GymWrapper(gymnasium.Env):
                     if not indices or abs(self.waypoints[idx][0] - self.waypoints[indices[0]][0]) > self.min_distance_between_cars:
                         indices.append(idx)
                 
-                # Set opponent position
-                starting_poses[0] = [
+                # Set opponent position (now index 1)
+                starting_poses[1] = [
                     self.waypoints[indices[0]][1],  # x
                     self.waypoints[indices[0]][2],  # y
                     self.waypoints[indices[0]][3]   # theta
                 ]
                 
-                # Set RL agent position
-                starting_poses[1] = [
+                # Set RL agent position (now index 0)
+                starting_poses[0] = [
                     self.waypoints[indices[1]][1],  # x
                     self.waypoints[indices[1]][2],  # y
                     self.waypoints[indices[1]][3]   # theta
@@ -318,23 +318,23 @@ class F110GymWrapper(gymnasium.Env):
                 
                 # Add small noise to prevent cars from being exactly aligned
                 noise = lambda: (2*random.random() - 1) * 0.1
-                starting_poses[0, 2] += noise() * 0.05  # Small theta noise for opponent
-                starting_poses[1, 2] += noise() * 0.05  # Small theta noise for RL agent
+                starting_poses[1, 2] += noise() * 0.05  # Small theta noise for opponent
+                starting_poses[0, 2] += noise() * 0.05  # Small theta noise for RL agent
                 
                 return starting_poses
             
-            # For scenarios 1-3, first place opponent at random position
+            # For scenarios 1-3, first place opponent at random position (now index 1)
             opponent_idx = random.sample(range(len(self.waypoints)), 1)[0]
             x_opponent = self.waypoints[opponent_idx][1]
             y_opponent = self.waypoints[opponent_idx][2]
             theta_opponent = self.waypoints[opponent_idx][3]
-            starting_poses[0] = [x_opponent, y_opponent, theta_opponent]
+            starting_poses[1] = [x_opponent, y_opponent, theta_opponent]
             
             # Get s-position of opponent
             s_opponent = self.waypoints[opponent_idx][0]
             
             if scenario == 1:
-                # Scenario 1: RL agent behind opponent (original behavior)
+                # Scenario 1: RL agent behind opponent 
                 s_agent = (s_opponent - self.min_distance_between_cars) % self.track.s_frame_max
                 x_agent, y_agent, theta_agent = self.track.frenet_to_cartesian(s_agent, 0, 0)
                 
@@ -359,7 +359,8 @@ class F110GymWrapper(gymnasium.Env):
             y_agent += lateral_noise * np.cos(theta_agent + np.pi/2)
             theta_agent += theta_noise
             
-            starting_poses[1] = [x_agent, y_agent, theta_agent]
+            # Set RL agent position (now index 0)
+            starting_poses[0] = [x_agent, y_agent, theta_agent]
             
             return starting_poses
 
@@ -372,10 +373,10 @@ class F110GymWrapper(gymnasium.Env):
             
             # Combine RL agent's action with opponent's action
             combined_actions = np.zeros((self.num_agents, 2))
-            combined_actions[0] = opponent_action  # Opponent
-            combined_actions[1] = action  # RL agent
+            combined_actions[1] = opponent_action  # Opponent (now index 1)
+            combined_actions[0] = action           # RL agent (now index 0)
             
-            # --- Action Queuing Logic for RL agent only ---
+            # --- Action Queuing Logic for RL agent only (now index 0) ---
             if not self.action_buffer:  # If queue is empty
                 self.action_buffer.append(action.copy())
                 self.action_buffer.append(action.copy())
@@ -385,15 +386,15 @@ class F110GymWrapper(gymnasium.Env):
                 for _ in range(num_pushes):
                     self.action_buffer.append(action.copy())
             
-            # Get the action to execute for RL agent
+            # Get the action to execute for RL agent (now index 0)
             if self.action_buffer:
-                combined_actions[1] = self.action_buffer.popleft()
+                combined_actions[0] = self.action_buffer.popleft()
             
             # Step the environment with combined actions
             obs, reward, done, info = self.env.step(combined_actions)
             
-            # Update opponent observation for next step
-            self.opponent_obs = self._process_observation(obs, agent_idx=0)
+            # Update opponent observation for next step (now index 1)
+            self.opponent_obs = self._process_observation(obs, agent_idx=1)
             
         else:
             # Original single-agent code
@@ -428,7 +429,7 @@ class F110GymWrapper(gymnasium.Env):
         if self.current_step >= self._max_episode_steps:
             truncated = True
 
-        # Get values for RL agent (agent 1 in racing mode, agent 0 otherwise)
+        # Get values for RL agent (agent 0)
         agent_idx = self.rl_agent_idx if self.racing_mode else 0
         linear_velocity = obs["linear_vels_x"][agent_idx]
         frenet_arc_length = obs["state_frenet"][agent_idx][0]
@@ -450,11 +451,11 @@ class F110GymWrapper(gymnasium.Env):
         # Adjust reward for racing scenario
         if self.racing_mode:
             # reward for overtaking the opponent
-            opponent_s = obs["state_frenet"][0][0]
+            opponent_s = obs["state_frenet"][1][0] # Opponent is now index 1
             agent_s = frenet_arc_length 
             s_diff = agent_s - opponent_s
             overtake_reward = np.tanh(s_diff)
-            reward = progress_reward * 10 + safety_distance_reward * 0 + linear_velocity_reward * 1 + collision_punishment * 1000 + angular_velocity_punishment * 0 + overtake_reward * 1
+            reward = progress_reward * 10 + safety_distance_reward * 0 + linear_velocity_reward * 1 + collision_punishment * 1000 + angular_velocity_punishment * 0 + overtake_reward * 0
         else:
             # Original reward function for single-agent
             reward = progress_reward * 10 + safety_distance_reward * 0 + linear_velocity_reward * 1 + collision_punishment * 1000 + angular_velocity_punishment * 0 
