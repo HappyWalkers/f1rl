@@ -8,12 +8,12 @@ class LatticePlannerPolicy:
     Generates multiple potential trajectories (lattice) and selects the optimal one.
     Designed to handle overtaking scenarios in racing.
     """
-    def __init__(self, track: Track, num_trajectories=20, planning_horizon=10.0):
+    def __init__(self, track: Track, num_trajectories=10, planning_horizon=10.0):
         # Configuration
         self.track = track
         self.num_trajectories = num_trajectories  # Number of lateral trajectories to consider
         self.planning_horizon = planning_horizon  # How far ahead to plan in s coordinate
-        self.planning_resolution = 200
+        self.planning_resolution = 30
         
         # Trajectory parameters
         self.lateral_offsets = np.linspace(-2, 2, num_trajectories)  # Lateral offset options

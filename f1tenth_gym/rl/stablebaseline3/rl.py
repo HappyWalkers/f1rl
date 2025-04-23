@@ -571,36 +571,38 @@ def initialize_with_imitation_learning(model, env, imitation_policy_type="PURE_P
     
     logging.info(f"Collecting {total_transitions} transitions across {env.num_envs} environments")
     
-    while collected_transitions < total_transitions:
-        # Generate expert actions for each environment
-        actions = []
-        for i in range(env.num_envs):
-            # Get action from the appropriate expert policy
-            action, _ = expert_policies[i].predict(observations[i], deterministic=True)
-            actions.append(action)
-        
-        # Convert to numpy array for VecEnv
-        actions = np.array(actions)
-        
-        # Step all environments together
-        next_observations, rewards, dones, infos = env.step(actions)
-        
-        # Store transitions 
-        demonstrations.append((observations, actions, rewards, next_observations, dones))
-        collected_transitions += env.num_envs
-        
-        # reset the finished environments
-        for i in range(env.num_envs):
-            if dones[i]:
-                next_observations[i] = env.env_method('reset', indices=i)[0][0]
-                if hasattr(expert_policies[i], 'reset'):
-                    expert_policies[i].reset()
-        observations = next_observations
-        
-        # Print progress every progress_interval transitions
-        if collected_transitions % (total_transitions // 10) < env.num_envs:
-            logging.info(f"Progress: {collected_transitions}/{total_transitions} transitions collected")
+    # Create progress bar for collecting transitions
+    with tqdm(total=total_transitions, desc="Collecting Demonstration Transitions") as pbar:
+        while collected_transitions < total_transitions:
+            # Generate expert actions for each environment
+            actions = []
+            for i in range(env.num_envs):
+                # Get action from the appropriate expert policy
+                action, _ = expert_policies[i].predict(observations[i], deterministic=True)
+                actions.append(action)
             
+            # Convert to numpy array for VecEnv
+            actions = np.array(actions)
+            
+            # Step all environments together
+            next_observations, rewards, dones, infos = env.step(actions)
+            
+            # Store transitions 
+            demonstrations.append((observations, actions, rewards, next_observations, dones))
+            
+            # Update progress bar with number of new transitions
+            new_transitions = env.num_envs
+            collected_transitions += new_transitions
+            pbar.update(new_transitions)
+            
+            # reset the finished environments
+            for i in range(env.num_envs):
+                if dones[i]:
+                    next_observations[i] = env.env_method('reset', indices=i)[0][0]
+                    if hasattr(expert_policies[i], 'reset'):
+                        expert_policies[i].reset()
+            observations = next_observations
+    
     logging.info(f"Collected {collected_transitions} demonstration transitions")
 
     # Pretrain the model using the demonstrations
