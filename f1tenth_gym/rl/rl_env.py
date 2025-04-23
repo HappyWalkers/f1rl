@@ -270,7 +270,7 @@ class F110GymWrapper(gymnasium.Env):
           1. RL agent behind the opponent (original behavior)
           2. RL agent in front of the opponent
           3. RL agent at the side of opponent 
-          4. (low probability) Random positions for both cars
+          4. Random positions for both cars
         
         In non-racing mode:
         - Places a single agent at a random position
@@ -280,10 +280,10 @@ class F110GymWrapper(gymnasium.Env):
         """
         if not self.racing_mode:
             # Original single-agent code
-            starting_idx = random.sample(range(len(self.waypoints)), 1)
-            x, y = self.waypoints[starting_idx][0, 1], self.waypoints[starting_idx][0, 2]
+            starting_idx = random.sample(range(len(self.waypoints)), 1)[0]
+            x, y = self.waypoints[starting_idx][1], self.waypoints[starting_idx][2]
             theta_noise = (2*random.random() - 1) * 0.1
-            theta = self.waypoints[starting_idx][0, 3] + theta_noise
+            theta = self.waypoints[starting_idx][3] + theta_noise
             starting_pos = np.array([[x, y, theta]])
             return starting_pos
         else:
@@ -291,7 +291,7 @@ class F110GymWrapper(gymnasium.Env):
             starting_poses = np.zeros((self.num_agents, 3))
             
             # Choose scenario (4th scenario has lower probability)
-            scenario = random.choices([1, 2, 3, 4], weights=[0.35, 0.35, 0.25, 0.05])[0]
+            scenario = random.choices([1, 2, 3, 4], weights=[0.4, 0.1, 0.4, 0.1])[0]
             
             if scenario == 4:
                 # Scenario 4: Random positions for both cars
@@ -299,21 +299,21 @@ class F110GymWrapper(gymnasium.Env):
                 indices = []
                 while len(indices) < 2:
                     idx = random.randrange(len(self.waypoints))
-                    if not indices or abs(self.waypoints[idx][0, 0] - self.waypoints[indices[0]][0, 0]) > self.min_distance_between_cars:
+                    if not indices or abs(self.waypoints[idx][0] - self.waypoints[indices[0]][0]) > self.min_distance_between_cars:
                         indices.append(idx)
                 
                 # Set opponent position
                 starting_poses[0] = [
-                    self.waypoints[indices[0]][0, 1],  # x
-                    self.waypoints[indices[0]][0, 2],  # y
-                    self.waypoints[indices[0]][0, 3]   # theta
+                    self.waypoints[indices[0]][1],  # x
+                    self.waypoints[indices[0]][2],  # y
+                    self.waypoints[indices[0]][3]   # theta
                 ]
                 
                 # Set RL agent position
                 starting_poses[1] = [
-                    self.waypoints[indices[1]][0, 1],  # x
-                    self.waypoints[indices[1]][0, 2],  # y
-                    self.waypoints[indices[1]][0, 3]   # theta
+                    self.waypoints[indices[1]][1],  # x
+                    self.waypoints[indices[1]][2],  # y
+                    self.waypoints[indices[1]][3]   # theta
                 ]
                 
                 # Add small noise to prevent cars from being exactly aligned
@@ -324,14 +324,14 @@ class F110GymWrapper(gymnasium.Env):
                 return starting_poses
             
             # For scenarios 1-3, first place opponent at random position
-            opponent_idx = random.sample(range(len(self.waypoints)), 1)
-            x_opponent = self.waypoints[opponent_idx][0, 1]
-            y_opponent = self.waypoints[opponent_idx][0, 2]
-            theta_opponent = self.waypoints[opponent_idx][0, 3]
+            opponent_idx = random.sample(range(len(self.waypoints)), 1)[0]
+            x_opponent = self.waypoints[opponent_idx][1]
+            y_opponent = self.waypoints[opponent_idx][2]
+            theta_opponent = self.waypoints[opponent_idx][3]
             starting_poses[0] = [x_opponent, y_opponent, theta_opponent]
             
             # Get s-position of opponent
-            s_opponent = self.waypoints[opponent_idx][0, 0]
+            s_opponent = self.waypoints[opponent_idx][0]
             
             if scenario == 1:
                 # Scenario 1: RL agent behind opponent (original behavior)
@@ -473,6 +473,9 @@ class F110GymWrapper(gymnasium.Env):
         logging.debug(f"collision punishment: {collision_punishment:.2f}")
         logging.debug(f"angular velocity punishment: {angular_velocity_punishment:.2f}")
         if self.racing_mode:
+            logging.debug(f"opponent s: {opponent_s:.2f}")
+            logging.debug(f"agent s: {agent_s:.2f}")
+            logging.debug(f"s_diff: {s_diff:.2f}")
             logging.debug(f"overtake reward: {overtake_reward:.2f}")
         logging.debug(f"total reward: {reward:.2f}")
 
