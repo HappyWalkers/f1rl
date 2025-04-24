@@ -19,7 +19,7 @@ class LatticePlannerPolicy:
         self.lateral_offsets = np.linspace(-2, 2, num_trajectories)  # Lateral offset options
         
         # Speed control
-        self.max_speed = 8.0
+        self.max_speed = 6.0
         self.min_speed = 0.5
         
         # Obstacle parameters

@@ -42,9 +42,12 @@ RUN apt-get update --fix-missing && \
                     fontconfig \
                     libfreetype6-dev
 
-RUN pip3 install --upgrade pip
 RUN pip3 install PyOpenGL \
                  PyOpenGL_accelerate
+
+# ────────── Python packages that don’t cause trouble ──────────
+RUN python3 -m pip install --no-cache-dir --upgrade "pip<24" && \
+    python3 -m pip install --no-cache-dir PyOpenGL PyOpenGL_accelerate
 
 RUN mkdir /f1tenth_gym
 COPY . /f1tenth_gym

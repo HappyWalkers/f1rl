@@ -770,7 +770,7 @@ def train(env, seed, num_envs=1, use_domain_randomization=False, use_imitation_l
         def __init__(self, check_freq, save_path, verbose=1):
             super(SaveOnBestTrainingRewardCallback, self).__init__(verbose)
             self.check_freq = check_freq
-            self.model_save_path = os.path.join(save_path, "best_model")
+            self.model_save_path = save_path
             self.best_mean_reward = -float('inf')
         
         def _init_callback(self):
@@ -793,7 +793,7 @@ def train(env, seed, num_envs=1, use_domain_randomization=False, use_imitation_l
                         self.best_mean_reward = mean_reward
                         if self.verbose > 0:
                             print(f"Saving new best model with mean reward: {mean_reward:.2f}")
-                        self.model.save(self.model_save_path)
+                        self.model.save(os.path.join(self.model_save_path, "best_model"))
             
             return True
 
