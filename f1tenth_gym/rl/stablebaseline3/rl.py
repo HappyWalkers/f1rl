@@ -32,7 +32,7 @@ class F1TenthFeaturesExtractor(BaseFeaturesExtractor):
         features_dim: int = 1024,
         state_dim: int = 4,
         lidar_dim: int = 1080,
-        param_dim: int = 15, 
+        param_dim: int = 12, 
         include_params: bool = True
     ):
         # Determine whether the observation includes parameters based on its dimension
@@ -58,7 +58,13 @@ class F1TenthFeaturesExtractor(BaseFeaturesExtractor):
         self.state_net = nn.Sequential(
             nn.Linear(state_dim, 128),
             nn.ReLU(),
-            nn.Linear(128, 128),
+            nn.Linear(128, 256),
+            nn.ReLU(),
+            nn.Linear(256, 512),
+            nn.ReLU(),
+            nn.Linear(512, 1024),
+            nn.ReLU(),
+            nn.Linear(1024, 1024),
             nn.ReLU()
         )
         
@@ -99,21 +105,16 @@ class F1TenthFeaturesExtractor(BaseFeaturesExtractor):
         # Pure MLP architecture for processing LiDAR data
         self.lidar_net = nn.Sequential(
             nn.Flatten(),
-            
             nn.Linear(lidar_dim, 1024),
             nn.ReLU(),
-            
-            nn.Linear(1024, 512),
+            nn.Linear(1024, 1024),
             nn.ReLU(),
-            
-            nn.Linear(512, 256),
+            nn.Linear(1024, 1024),
             nn.ReLU(),
-            
-            nn.Linear(256, 128),
+            nn.Linear(1024, 1024),
             nn.ReLU(),
-            
-            nn.Linear(128, 128),
-            nn.ReLU()
+            nn.Linear(1024, 1024),
+            nn.ReLU(),
         )
         
         # Network for processing environment parameters (if included)
@@ -121,18 +122,32 @@ class F1TenthFeaturesExtractor(BaseFeaturesExtractor):
             self.param_net = nn.Sequential(
                 nn.Linear(param_dim, 128),
                 nn.ReLU(),
-                nn.Linear(128, 128),
+                nn.Linear(128, 256),
+                nn.ReLU(),
+                nn.Linear(256, 512),
+                nn.ReLU(),
+                nn.Linear(512, 1024),
+                nn.ReLU(),
+                nn.Linear(1024, 1024),
                 nn.ReLU()
             )
             # Combined dimension from all branches
-            combined_dim = 128 + 128 + 128  # state + lidar + param
+            combined_dim = 1024 * 3  # state + lidar + param
         else:
             self.param_net = None
-            combined_dim = 128 + 128  # state + lidar
+            combined_dim = 1024 * 2  # state + lidar
         
         # Final layers to combine all features
         self.combined_net = nn.Sequential(
-            nn.Linear(combined_dim, features_dim),
+            nn.Linear(combined_dim, 1024),
+            nn.ReLU(),
+            nn.Linear(1024, 1024),
+            nn.ReLU(),
+            nn.Linear(1024, 1024),
+            nn.ReLU(),
+            nn.Linear(1024, 1024),
+            nn.ReLU(),
+            nn.Linear(1024, features_dim),
             nn.ReLU()
         )
 
@@ -181,7 +196,7 @@ def create_ppo(env, seed, include_params_in_obs=True):
     obs_dim = env.observation_space.shape[0]
     lidar_dim = 1080
     state_dim = 4
-    param_dim = 15
+    param_dim = 12
     
     # Define policy kwargs with custom feature extractor
     policy_kwargs = {
@@ -231,7 +246,7 @@ def create_ddpg(env, seed, include_params_in_obs=True):
     obs_dim = env.observation_space.shape[0]
     lidar_dim = 1080
     state_dim = 4
-    param_dim = 15
+    param_dim = 12
     
     # Define policy kwargs with custom feature extractor
     policy_kwargs = {
@@ -267,7 +282,7 @@ def create_td3(env, seed, include_params_in_obs=True):
     obs_dim = env.observation_space.shape[0]
     lidar_dim = 1080
     state_dim = 4
-    param_dim = 15
+    param_dim = 12
     
     # Define policy kwargs with custom feature extractor
     policy_kwargs = {
@@ -299,24 +314,17 @@ def create_td3(env, seed, include_params_in_obs=True):
 
 def create_sac(env, seed, include_params_in_obs=True):
     """Create a SAC model with custom neural network architecture"""
-    # Determine if the environment observation includes parameters
-    obs_dim = env.observation_space.shape[0]
-    lidar_dim = 1080
-    state_dim = 4
-    param_dim = 15
-    
     # Define policy kwargs with custom feature extractor
     policy_kwargs = {
         "features_extractor_class": F1TenthFeaturesExtractor,
         "features_extractor_kwargs": {
             "features_dim": 1024,
-            "state_dim": state_dim,
-            "lidar_dim": lidar_dim,
-            "param_dim": param_dim,
+            "state_dim": 4,
+            "lidar_dim": 1080,
+            "param_dim": 12,
             "include_params": include_params_in_obs
         },
-        # Using a moderately sized network for actor and critic
-        "net_arch": [1024, 512, 256, 128, 64]
+        "net_arch": [1024, 1024, 512, 512, 256, 256, 128, 128, 64, 64]
     }
     
     model = SAC(

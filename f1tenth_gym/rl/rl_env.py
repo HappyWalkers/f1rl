@@ -103,15 +103,15 @@ class F110GymWrapper(gymnasium.Env):
             timestep=0.02,
         )
 
-        # Define the parameter vector dimensions
-        self.num_params = len(self.get_env_params_vector())
+        # Define the parameter vector dimensions - only include domain randomized params
+        self.num_params = 12
         
         # Update observation space: [s, ey, vel, yaw_angle] + lidar + params (if included)
         # low/high values are approximate, might need refinement
         if self.include_params_in_obs:
             self.observation_space = spaces.Box(
                 low=np.concatenate(([-1000.0, -5.0, v_min, -np.pi], np.zeros(1080), np.zeros(self.num_params))),
-                high=np.concatenate(([1000.0, 5.0, v_max, np.pi], np.full(1080, 30.0), np.ones(self.num_params) * 10.0)),
+                high=np.concatenate(([1000.0, 5.0, v_max, np.pi], np.full(1080, 30.0), np.ones(self.num_params))),
                 shape=(1084 + self.num_params,), dtype=np.float32  # 4 state values + 1080 lidar points + env params
             )
         else:
@@ -149,10 +149,9 @@ class F110GymWrapper(gymnasium.Env):
     def get_env_params_vector(self):
         """Returns a vector of the current environment parameters for inclusion in observation."""
         params = self.get_env_params()
-        # Convert dictionary to vector in a consistent order
+        # Convert dictionary to vector in a consistent order - only include domain randomized params
         param_vector = np.array([
             params['mu'], params['C_Sf'], params['C_Sr'], 
-            params['lf'], params['lr'], params['h'], 
             params['m'], params['I'],
             params['lidar_noise_stddev'], params['s_noise_stddev'],
             params['ey_noise_stddev'], params['vel_noise_stddev'],
@@ -163,11 +162,10 @@ class F110GymWrapper(gymnasium.Env):
         # Normalize parameters to a reasonable range if needed
         # This is important for neural networks to process them effectively
         param_vector = param_vector / np.array([
-            1.0, 10.0, 10.0,  # mu, C_Sf, C_Sr
-            0.2, 0.2, 0.1,    # lf, lr, h
-            5.0, 0.1,         # m, I
-            0.05, 0.05, 0.05, 0.05, 0.05,  # noise stddevs
-            0.5, 0.5          # push probabilities
+            1.1, 5.5, 5.5,     # mu, C_Sf, C_Sr
+            4.5, 0.06,         # m, I
+            0.01, 0.01, 0.01, 0.01, 0.01,  # noise stddevs
+            0.01, 0.01         # push probabilities
         ])
         
         return param_vector
