@@ -36,12 +36,13 @@ flags.DEFINE_string("logging_level", "INFO", "Logging level")
 flags.DEFINE_boolean("eval", False, "Run only evaluation (no training)")
 flags.DEFINE_string("model_path", "./logs/best_model/best_model.zip", "Path to the model to evaluate")
 flags.DEFINE_string("algorithm", "SAC", "Algorithm used (SAC, PPO, DDPG, TD3, WALL_FOLLOW, PURE_PURSUIT, LATTICE)")
-flags.DEFINE_integer("num_eval_episodes", 5, "Number of episodes to evaluate")
+flags.DEFINE_integer("num_eval_episodes", 2, "Number of episodes to evaluate")
 flags.DEFINE_boolean("use_il", True, "Whether to use imitation learning before RL training")
 flags.DEFINE_enum("il_policy", "PURE_PURSUIT", ["WALL_FOLLOW", "PURE_PURSUIT", "LATTICE"],
                   "Policy to use for imitation learning.")
 flags.DEFINE_integer("num_envs", 24, "Number of parallel environments for training")
 flags.DEFINE_boolean("use_dr", True, "Apply domain randomization during training")
+flags.DEFINE_integer("num_param_cmbs", 24, "Number of parameter combinations to use for domain randomization")
 flags.DEFINE_boolean("include_params_in_obs", True, "Include environment parameters in observations for contextual RL")
 flags.DEFINE_boolean("racing_mode", False, "Enable racing mode with two cars")
 
@@ -113,6 +114,7 @@ def main(argv):
         env_kwargs=base_env_kwargs,
         seed=FLAGS.seed,
         num_envs=FLAGS.num_envs,
+        num_param_cmbs=FLAGS.num_param_cmbs,
         use_domain_randomization=FLAGS.use_dr,
         include_params_in_obs=FLAGS.include_params_in_obs,
         racing_mode=FLAGS.racing_mode
@@ -131,6 +133,7 @@ def main(argv):
             env=vec_env,
             seed=FLAGS.seed,
             num_envs=FLAGS.num_envs,
+            num_param_cmbs=FLAGS.num_param_cmbs,
             use_domain_randomization=FLAGS.use_dr,
             use_imitation_learning=FLAGS.use_il,
             imitation_policy_type=FLAGS.il_policy,

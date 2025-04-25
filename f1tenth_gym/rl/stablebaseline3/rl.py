@@ -661,7 +661,7 @@ def make_env(env_id, rank, seed=0, env_kwargs=None):
     # set_global_seeds(seed) # Deprecated in SB3
     return _init
 
-def create_vec_env(env_kwargs, seed, num_envs=1, use_domain_randomization=False, include_params_in_obs=True, racing_mode=False):
+def create_vec_env(env_kwargs, seed, num_envs=1, num_param_cmbs=None, use_domain_randomization=False, include_params_in_obs=True, racing_mode=False):
     """
     Creates vectorized environments for training and evaluation.
 
@@ -669,6 +669,8 @@ def create_vec_env(env_kwargs, seed, num_envs=1, use_domain_randomization=False,
         env_kwargs (dict): Base arguments for the F110GymWrapper environment.
         seed (int): Random seed.
         num_envs (int): Number of parallel environments to use.
+        num_param_cmbs (int): Number of parameter combinations to use for domain randomization.
+                             If None and use_domain_randomization is True, defaults to num_envs.
         use_domain_randomization (bool): Whether to randomize environment parameters.
         include_params_in_obs (bool): Whether to include environment parameters in observations.
         racing_mode (bool): Whether to use racing mode with two cars.
@@ -676,6 +678,44 @@ def create_vec_env(env_kwargs, seed, num_envs=1, use_domain_randomization=False,
     Returns:
         VecEnv: The vectorized environment.
     """
+    # If num_param_cmbs is not specified but DR is used, default to num_envs
+    if num_param_cmbs is None and use_domain_randomization:
+        num_param_cmbs = num_envs
+    # If using DR, ensure num_param_cmbs is at least 1
+    elif use_domain_randomization and num_param_cmbs < 1:
+        num_param_cmbs = 1
+        logging.warning(f"num_param_cmbs must be at least 1 for domain randomization. Setting to 1.")
+    
+    # Generate parameter combinations first if using domain randomization
+    param_combinations = []
+    if use_domain_randomization and num_param_cmbs > 0:
+        # Create the specified number of parameter combinations
+        for i in range(num_param_cmbs):
+            param_seed = seed + i
+            rng = np.random.default_rng(param_seed)
+            param_set = {
+                'mu': rng.uniform(0.6, 1.1),
+                'C_Sf': rng.uniform(4.0, 5.5),
+                'C_Sr': rng.uniform(4.0, 5.5),
+                'm': rng.uniform(3.0, 4.5),
+                'I': rng.uniform(0.03, 0.06),
+                'lidar_noise_stddev': rng.uniform(0.0, 0.01),
+                's_noise_stddev': rng.uniform(0.0, 0.01),
+                'ey_noise_stddev': rng.uniform(0.0, 0.01),
+                'vel_noise_stddev': rng.uniform(0.0, 0.01),
+                'yaw_noise_stddev': rng.uniform(0.0, 0.01)
+            }
+            sampled_push_0_prob = rng.uniform(0.0, 0.01)
+            param_set['push_0_prob'] = sampled_push_0_prob
+            param_set['push_2_prob'] = sampled_push_0_prob
+            
+            logging.info(
+                f"Param Set {i} Parameters: mu: {param_set['mu']}, C_Sf: {param_set['C_Sf']}, C_Sr: {param_set['C_Sr']}, m: {param_set['m']}, I: {param_set['I']}; "
+                f"Observation noise: lidar_noise_stddev: {param_set['lidar_noise_stddev']}, s: {param_set['s_noise_stddev']}, ey: {param_set['ey_noise_stddev']}, vel: {param_set['vel_noise_stddev']}, yaw: {param_set['yaw_noise_stddev']}; "
+                f"Push probabilities: push_0_prob: {param_set['push_0_prob']}, push_2_prob: {param_set['push_2_prob']}"
+            )
+            param_combinations.append(param_set)
+    
     # --- Create Environment(s) ---
     env_fns = []
     for i in range(num_envs):
@@ -687,28 +727,17 @@ def create_vec_env(env_kwargs, seed, num_envs=1, use_domain_randomization=False,
         if 'racing_mode' not in current_env_kwargs:
             current_env_kwargs['racing_mode'] = racing_mode
         
-        if use_domain_randomization:
-            # Sample parameters randomly for this environment instance
-            rng = np.random.default_rng(rank_seed)
-            current_env_kwargs['mu'] = rng.uniform(0.6, 1.1)
-            current_env_kwargs['C_Sf'] = rng.uniform(4.0, 5.5)
-            current_env_kwargs['C_Sr'] = rng.uniform(4.0, 5.5)
-            current_env_kwargs['m'] = rng.uniform(3.0, 4.5)
-            current_env_kwargs['I'] = rng.uniform(0.03, 0.06)
-            current_env_kwargs['lidar_noise_stddev'] = rng.uniform(0.0, 0.01)
-            current_env_kwargs['s_noise_stddev'] = rng.uniform(0.0, 0.01)
-            current_env_kwargs['ey_noise_stddev'] = rng.uniform(0.0, 0.01)
-            current_env_kwargs['vel_noise_stddev'] = rng.uniform(0.0, 0.01)
-            current_env_kwargs['yaw_noise_stddev'] = rng.uniform(0.0, 0.01)
-            sampled_push_0_prob = rng.uniform(0.0, 0.01)
-            current_env_kwargs['push_0_prob'] = sampled_push_0_prob
-            current_env_kwargs['push_2_prob'] = sampled_push_0_prob
+        if use_domain_randomization and param_combinations:
+            # Select parameter set from the combinations we created
+            # Each parameter set is used for (num_envs / num_param_cmbs) environments
+            param_idx = i % num_param_cmbs
+            param_set = param_combinations[param_idx]
             
-            logging.info(
-                f"Env {i} Parameters: mu: {current_env_kwargs['mu']}, C_Sf: {current_env_kwargs['C_Sf']}, C_Sr: {current_env_kwargs['C_Sr']}, m: {current_env_kwargs['m']}, I: {current_env_kwargs['I']}; "
-                f"Observation noise: lidar_noise_stddev: {current_env_kwargs['lidar_noise_stddev']}, s: {current_env_kwargs['s_noise_stddev']}, ey: {current_env_kwargs['ey_noise_stddev']}, vel: {current_env_kwargs['vel_noise_stddev']}, yaw: {current_env_kwargs['yaw_noise_stddev']}; "
-                f"Push probabilities: push_0_prob: {current_env_kwargs['push_0_prob']}, push_2_prob: {current_env_kwargs['push_2_prob']}"
-            )
+            # Assign parameters to this environment
+            for key, value in param_set.items():
+                current_env_kwargs[key] = value
+            
+            logging.info(f"Env {i} using parameter set {param_idx}")
         
         # Create the thunk (function) for this env instance
         # Use partial to pass the potentially modified kwargs
@@ -722,7 +751,7 @@ def create_vec_env(env_kwargs, seed, num_envs=1, use_domain_randomization=False,
     return env
 
 # Updated train function to handle VecEnv and Domain Randomization
-def train(env, seed, num_envs=1, use_domain_randomization=False, use_imitation_learning=True, imitation_policy_type="PURE_PURSUIT", algorithm="SAC", include_params_in_obs=True, racing_mode=False):
+def train(env, seed, num_envs=1, num_param_cmbs=None, use_domain_randomization=False, use_imitation_learning=True, imitation_policy_type="PURE_PURSUIT", algorithm="SAC", include_params_in_obs=True, racing_mode=False):
     """
     Trains the RL model.
 
@@ -730,6 +759,8 @@ def train(env, seed, num_envs=1, use_domain_randomization=False, use_imitation_l
         env: Vectorized environment for training.
         seed (int): Random seed.
         num_envs (int): Number of parallel environments to use.
+        num_param_cmbs (int): Number of parameter combinations to use for domain randomization.
+                             If None and use_domain_randomization is True, defaults to num_envs.
         use_domain_randomization (bool): Whether to randomize environment parameters.
         use_imitation_learning (bool): Whether to use imitation learning before RL training.
         imitation_policy_type (str): Policy for imitation learning.
@@ -761,7 +792,7 @@ def train(env, seed, num_envs=1, use_domain_randomization=False, use_imitation_l
     # --- RL Training ---
     # Create formatted path based on training parameters and timestamp
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    model_dir_name = f"{algorithm}_envs{num_envs}_dr{int(use_domain_randomization)}_il{int(use_imitation_learning)}_crl{int(include_params_in_obs)}_racing{int(racing_mode)}"
+    model_dir_name = f"{algorithm}_envs{num_envs}_params{num_param_cmbs if num_param_cmbs is not None else num_envs}_dr{int(use_domain_randomization)}_il{int(use_imitation_learning)}_crl{int(include_params_in_obs)}_racing{int(racing_mode)}"
     if use_imitation_learning:
         model_dir_name += f"_{imitation_policy_type}"
     model_dir_name += f"_seed{seed}_{timestamp}"
