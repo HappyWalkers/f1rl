@@ -29,22 +29,22 @@ from PIL import Image
 
 FLAGS = flags.FLAGS
 
-flags.DEFINE_integer("seed", 42, "Random seed for reproducibility")
-flags.DEFINE_integer("map_index", 63, "Index of the map to use")
 flags.DEFINE_integer("num_agents", 1, "Number of agents")
-flags.DEFINE_string("logging_level", "INFO", "Logging level")
-flags.DEFINE_boolean("eval", False, "Run only evaluation (no training)")
-flags.DEFINE_string("model_path", "./logs/best_model/best_model.zip", "Path to the model to evaluate")
-flags.DEFINE_string("algorithm", "SAC", "Algorithm used (SAC, PPO, DDPG, TD3, WALL_FOLLOW, PURE_PURSUIT, LATTICE)")
-flags.DEFINE_integer("num_eval_episodes", 2, "Number of episodes to evaluate")
 flags.DEFINE_boolean("use_il", True, "Whether to use imitation learning before RL training")
-flags.DEFINE_enum("il_policy", "PURE_PURSUIT", ["WALL_FOLLOW", "PURE_PURSUIT", "LATTICE"],
-                  "Policy to use for imitation learning.")
+flags.DEFINE_enum("il_policy", "PURE_PURSUIT", ["WALL_FOLLOW", "PURE_PURSUIT", "LATTICE"], "Policy to use for imitation learning.")
 flags.DEFINE_integer("num_envs", 24, "Number of parallel environments for training")
 flags.DEFINE_boolean("use_dr", True, "Apply domain randomization during training")
 flags.DEFINE_integer("num_param_cmbs", 24, "Number of parameter combinations to use for domain randomization")
 flags.DEFINE_boolean("include_params_in_obs", True, "Include environment parameters in observations for contextual RL")
 flags.DEFINE_boolean("racing_mode", False, "Enable racing mode with two cars")
+
+flags.DEFINE_integer("seed", 42, "Random seed for reproducibility")
+flags.DEFINE_integer("map_index", 63, "Index of the map to use")
+flags.DEFINE_string("logging_level", "INFO", "Logging level")
+flags.DEFINE_boolean("eval", False, "Run only evaluation (no training)")
+flags.DEFINE_string("model_path", "./logs/best_model/best_model.zip", "Path to the model to evaluate")
+flags.DEFINE_string("algorithm", "SAC", "Algorithm used (SAC, PPO, DDPG, TD3, WALL_FOLLOW, PURE_PURSUIT, LATTICE)")
+flags.DEFINE_integer("num_eval_episodes", 2, "Number of episodes to evaluate")
 
 
 os.environ['F110GYM_PLOT_SCALE'] = str(60.)
