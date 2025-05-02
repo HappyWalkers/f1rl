@@ -314,16 +314,15 @@ def create_td3(env, seed, include_params_in_obs=True):
 
 def create_sac(env, seed, include_params_in_obs=True):
     """Create a SAC model with custom neural network architecture"""
-    # Define policy kwargs with custom feature extractor
     policy_kwargs = {
-        "features_extractor_class": F1TenthFeaturesExtractor,
-        "features_extractor_kwargs": {
-            "features_dim": 1024,
-            "state_dim": 4,
-            "lidar_dim": 1080,
-            "param_dim": 12,
-            "include_params": include_params_in_obs
-        },
+        # "features_extractor_class": F1TenthFeaturesExtractor,
+        # "features_extractor_kwargs": {
+        #     "features_dim": 1024,
+        #     "state_dim": 4,
+        #     "lidar_dim": 1080,
+        #     "param_dim": 12,
+        #     "include_params": include_params_in_obs
+        # },
         "net_arch": [1024, 1024, 512, 512, 256, 256, 128, 128, 64, 64]
     }
     
