@@ -126,10 +126,10 @@ class EnvRenderer(pyglet.window.Window):
         self.lidar_line, = self.ax.plot([], [])
         self.ax.set_xlabel("Beam Index")
         self.ax.set_ylabel("Distance")
-        # Some default limits; we’ll adjust them dynamically
+        # Some default limits; we'll adjust them dynamically
         self.ax.set_xlim(0, 100)
         self.ax.set_ylim(0, 10)
-        plt.show(block=False)  # Don’t block; keep going so we can update in real-time.
+        plt.show(block=False)  # Don't block; keep going so we can update in real-time.
 
     def update_map(self, map_path, map_ext):
         """
@@ -218,11 +218,12 @@ class EnvRenderer(pyglet.window.Window):
             None
         """
 
-        # pan camera
-        self.left -= dx * self.zoom_level
-        self.right -= dx * self.zoom_level
-        self.bottom -= dy * self.zoom_level
-        self.top -= dy * self.zoom_level
+        # pan camera - Disabled for follow-camera mode
+        # self.left -= dx * self.zoom_level
+        # self.right -= dx * self.zoom_level
+        # self.bottom -= dy * self.zoom_level
+        # self.top -= dy * self.zoom_level
+        pass # Keep the method signature but do nothing
 
     def on_mouse_scroll(self, x, y, dx, dy):
         """
@@ -297,6 +298,17 @@ class EnvRenderer(pyglet.window.Window):
         if self.poses is None:
             raise Exception('Agent poses not updated for renderer.')
 
+        # Center camera on ego agent
+        ego_x = self.poses[self.ego_idx, 0] * PLOT_SCALE
+        ego_y = self.poses[self.ego_idx, 1] * PLOT_SCALE
+        half_width = self.zoomed_width / 2
+        half_height = self.zoomed_height / 2
+        self.left = ego_x - half_width
+        self.right = ego_x + half_width
+        self.bottom = ego_y - half_height
+        self.top = ego_y + half_height
+
+
         # Initialize Projection matrix
         glMatrixMode(GL_PROJECTION)
         glLoadIdentity()
@@ -333,7 +345,6 @@ class EnvRenderer(pyglet.window.Window):
         Returns:
             None
         """
-
         self.ego_idx = obs['ego_idx']
         poses_x = obs['poses_x']
         poses_y = obs['poses_y']

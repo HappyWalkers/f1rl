@@ -494,8 +494,8 @@ class F110GymWrapper(gymnasium.Env):
 
         return processed_obs, reward, done, truncated, info # Gymnasium expects 5 return values
 
-    def render(self, mode='human_fast'): # Default to faster rendering
-        self.env.render(mode=mode)
+    def render(self, mode='rgb_array'): # Default to faster rendering
+        return self.env.render(mode=mode)
 
     def close(self):
         self.env.close()

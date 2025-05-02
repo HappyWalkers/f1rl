@@ -15,6 +15,7 @@ from typing import Dict, List, Tuple, Type, Union, Callable, Optional, Any
 from gym import spaces
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from tqdm import tqdm
+import cv2  # Import OpenCV for video recording
 
 from rl_env import F110GymWrapper # Import the wrapper
 
@@ -357,7 +358,7 @@ def create_sac(env, seed, include_params_in_obs=True):
     )
     return model
 
-def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm="SAC", num_episodes=5, model=None, racing_mode=False, collect_data=False, data_save_path=None):
+def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm="SAC", num_episodes=5, model=None, racing_mode=False, collect_data=False, data_save_path=None, record_video=False, video_dir="./videos"):
     """
     Evaluates a trained model or wall-following policy on the environment.
     
@@ -370,6 +371,8 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
         racing_mode: Whether to evaluate in racing mode with two cars
         collect_data: Whether to collect observation and action data during evaluation
         data_save_path: Path to save the collected data (JSON format)
+        record_video: Whether to record videos of the episodes
+        video_dir: Directory to save videos
     """
     # Set racing mode in environment if needed and not already set
     if racing_mode:
@@ -462,12 +465,43 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
                 "steps": []
             } if collect_data else None
             
+            # Create video directory if needed
+            if record_video:
+                os.makedirs(video_dir, exist_ok=True)
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                video_path = os.path.join(video_dir, f"{algorithm.lower()}_ep{episode}_env{env_idx}_{timestamp}.mp4")
+                logging.info(f"Recording video to {video_path}")
+                
+                # Get the dimensions of the rendered frames
+                # Use a temporary render to get dimensions
+                if is_vec_env:
+                    frame = eval_env.env_method('render', indices=[env_idx])[0]
+                else:
+                    frame = eval_env.render()
+                
+                # Setup video writer
+                if frame is not None:
+                    h, w, c = frame.shape
+                    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                    fps = 50  # Frames per second in the output video
+                    video_writer = cv2.VideoWriter(video_path, fourcc, fps, (w, h))
+                else:
+                    logging.warning("Could not get frame dimensions. Video recording may not work.")
+                    record_video = False  # Disable recording if we can't get frame dimensions
+            
+            
             while not (terminated or truncated):
-                # # Render environment - only render the current environment
-                # if is_vec_env:
-                #     eval_env.env_method('render', indices=[env_idx])
-                # else:
-                #     eval_env.render()
+                # Render environment and capture frame if recording video
+                if record_video:
+                    if is_vec_env:
+                        frame = eval_env.env_method('render', indices=[env_idx])[0]
+                    else:
+                        frame = eval_env.render()
+                    
+                    if frame is not None:
+                        # OpenCV uses BGR format instead of RGB
+                        frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                        video_writer.write(frame_bgr)
                 
                 # Get action from model
                 # Extract the observation for a single environment from the batch
@@ -548,6 +582,12 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
             # Episode completed
             episode_time = time.time() - episode_start_time
             
+            # Close video writer if we were recording
+            if record_video:
+                if 'video_writer' in locals() and video_writer is not None:
+                    video_writer.release()
+                    logging.info(f"Video saved to {video_path}")
+            
             # Record metrics
             episode_rewards.append(total_reward)
             episode_lengths.append(step_count)
@@ -565,11 +605,23 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
                 episode_data["episode_length"] = step_count
                 episode_data["episode_time"] = episode_time
                 
+                # Add video path if recorded
+                if record_video and total_reward >= 0:
+                    # Only include video path for episodes we're keeping
+                    episode_data["video_path"] = video_path
+                
                 # Only record episodes with non-negative rewards
                 if total_reward >= 0:
                     collected_data.append(episode_data)
                 else:
                     logging.info(f"Skipping episode with negative reward: {total_reward:.2f}")
+                    # Delete the video if we recorded one but aren't keeping the episode
+                    if record_video and os.path.exists(video_path):
+                        try:
+                            os.remove(video_path)
+                            logging.info(f"Deleted video for skipped episode: {video_path}")
+                        except Exception as e:
+                            logging.warning(f"Failed to delete video: {e}")
             
             # Reset for next episode
             print(f"Episode {episode+1} finished. Resetting...")
@@ -588,7 +640,6 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
     # Save collected data if requested
     if collect_data and data_save_path:
         import json
-        import os
         
         # Create directory if it doesn't exist
         os.makedirs(os.path.dirname(data_save_path), exist_ok=True)

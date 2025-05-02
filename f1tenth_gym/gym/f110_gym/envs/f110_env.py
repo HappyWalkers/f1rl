@@ -554,11 +554,12 @@ class F110Env(gym.Env):
             mode (str, default='human'): rendering mode, currently supports:
                 'human': slowed down rendering such that the env is rendered in a way that sim time elapsed is close to real time elapsed
                 'human_fast': render as fast as possible
+                'rgb_array': return the rendered frame as a numpy array
 
         Returns:
-            None
+            Union[None, np.ndarray]: Returns None for 'human' modes, or np.ndarray of shape (H, W, 3) for 'rgb_array' mode.
         """
-        assert mode in ['human', 'human_fast']
+        assert mode in ['human', 'human_fast', 'rgb_array']
         
         if F110Env.renderer is None:
             # first call, initialize everything
@@ -573,8 +574,21 @@ class F110Env(gym.Env):
         
         F110Env.renderer.dispatch_events()
         F110Env.renderer.on_draw()
-        F110Env.renderer.flip()
-        if mode == 'human':
-            time.sleep(0.001)
-        elif mode == 'human_fast':
-            pass
+        
+        if mode == 'rgb_array':
+            # Get the buffer and convert to NumPy array
+            buffer = pyglet.image.get_buffer_manager().get_color_buffer()
+            image_data = buffer.get_image_data()
+            arr = np.frombuffer(image_data.get_data(), dtype=np.uint8)
+            # Reshape based on buffer format and dimensions
+            arr = arr.reshape(buffer.height, buffer.width, 4) # Assuming RGBA format
+            arr = arr[::-1, :, :3] # Flip vertically and drop alpha channel (convert RGBA to RGB)
+            F110Env.renderer.flip() # Still need to flip to update window if also rendering 'human'
+            return arr
+        else:
+            F110Env.renderer.flip()
+            if mode == 'human':
+                time.sleep(0.001)
+            elif mode == 'human_fast':
+                pass
+            return None

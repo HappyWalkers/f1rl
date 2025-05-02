@@ -29,26 +29,29 @@ from PIL import Image
 
 FLAGS = flags.FLAGS
 
-flags.DEFINE_integer("num_agents", 1, "Number of agents")
+flags.DEFINE_integer("num_agents", 2, "Number of agents")
 flags.DEFINE_boolean("use_il", True, "Whether to use imitation learning before RL training")
 flags.DEFINE_enum("il_policy", "PURE_PURSUIT", ["WALL_FOLLOW", "PURE_PURSUIT", "LATTICE"], "Policy to use for imitation learning.")
-flags.DEFINE_integer("num_envs", 24, "Number of parallel environments for training")
-flags.DEFINE_boolean("use_dr", True, "Apply domain randomization during training")
-flags.DEFINE_integer("num_param_cmbs", 24, "Number of parameter combinations to use for domain randomization")
-flags.DEFINE_boolean("include_params_in_obs", True, "Include environment parameters in observations for contextual RL")
-flags.DEFINE_boolean("racing_mode", False, "Enable racing mode with two cars")
+flags.DEFINE_integer("num_envs", 1, "Number of parallel environments for training")
+flags.DEFINE_boolean("use_dr", False, "Apply domain randomization during training")
+flags.DEFINE_integer("num_param_cmbs", 1, "Number of parameter combinations to use for domain randomization")
+flags.DEFINE_boolean("include_params_in_obs", False, "Include environment parameters in observations for contextual RL")
+flags.DEFINE_boolean("racing_mode", True, "Enable racing mode with two cars")
 
 flags.DEFINE_integer("seed", 42, "Random seed for reproducibility")
-flags.DEFINE_integer("map_index", 63, "Index of the map to use")
+flags.DEFINE_integer("map_index", 3, "Index of the map to use")
 flags.DEFINE_string("logging_level", "INFO", "Logging level")
-flags.DEFINE_boolean("eval", False, "Run only evaluation (no training)")
+flags.DEFINE_boolean("eval", True, "Run only evaluation (no training)")
 flags.DEFINE_string("model_path", "./logs/best_model/best_model.zip", "Path to the model to evaluate")
-flags.DEFINE_string("algorithm", "SAC", "Algorithm used (SAC, PPO, DDPG, TD3, WALL_FOLLOW, PURE_PURSUIT, LATTICE)")
-flags.DEFINE_integer("num_eval_episodes", 2, "Number of episodes to evaluate")
+flags.DEFINE_string("algorithm", "LATTICE", "Algorithm used (SAC, PPO, DDPG, TD3, WALL_FOLLOW, PURE_PURSUIT, LATTICE)")
+flags.DEFINE_integer("num_eval_episodes", 200, "Number of episodes to evaluate")
 
 # Add new flags for data collection
-flags.DEFINE_boolean("collect_data", False, "Collect observation and action data during evaluation")
+flags.DEFINE_boolean("collect_data", True, "Collect observation and action data during evaluation")
 flags.DEFINE_string("data_save_path", "./evaluation_data.json", "Path to save the collected data (JSON format)")
+# Add flags for video recording
+flags.DEFINE_boolean("record_video", True, "Record videos of the episodes")
+flags.DEFINE_string("video_dir", "./videos", "Directory to save videos")
 
 os.environ['F110GYM_PLOT_SCALE'] = str(60.)
 
@@ -141,7 +144,9 @@ def main(argv):
             num_episodes=FLAGS.num_eval_episodes,
             racing_mode=FLAGS.racing_mode,
             collect_data=FLAGS.collect_data,
-            data_save_path=data_save_path
+            data_save_path=data_save_path,
+            record_video=FLAGS.record_video,
+            video_dir=FLAGS.video_dir
         )
     else:
         # Train with vectorized environments
