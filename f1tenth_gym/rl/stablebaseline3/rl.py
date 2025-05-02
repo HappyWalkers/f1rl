@@ -357,7 +357,7 @@ def create_sac(env, seed, include_params_in_obs=True):
     )
     return model
 
-def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm="SAC", num_episodes=5, model=None, racing_mode=False):
+def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm="SAC", num_episodes=5, model=None, racing_mode=False, collect_data=False, data_save_path=None):
     """
     Evaluates a trained model or wall-following policy on the environment.
     
@@ -368,6 +368,8 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
         num_episodes: Number of episodes to evaluate
         model: Optional pre-loaded model object (takes precedence over model_path)
         racing_mode: Whether to evaluate in racing mode with two cars
+        collect_data: Whether to collect observation and action data during evaluation
+        data_save_path: Path to save the collected data (JSON format)
     """
     # Set racing mode in environment if needed and not already set
     if racing_mode:
@@ -425,6 +427,9 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
     episode_lengths = []
     lap_times = []
     
+    # Data collection structure if needed
+    collected_data = []
+    
     # Run evaluation episodes for each environment
     for env_idx in range(num_envs):
         logging.info(f"Evaluating on environment {env_idx+1}/{num_envs}")
@@ -450,17 +455,68 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
             step_count = 0
             episode_start_time = time.time()
             
+            # Episode data dictionary if collecting data
+            episode_data = {
+                "episode_id": episode,
+                "env_id": env_idx,
+                "steps": []
+            } if collect_data else None
+            
             while not (terminated or truncated):
-                # Render environment - only render the current environment
-                if is_vec_env:
-                    eval_env.env_method('render', indices=[env_idx])
-                else:
-                    eval_env.render()
+                # # Render environment - only render the current environment
+                # if is_vec_env:
+                #     eval_env.env_method('render', indices=[env_idx])
+                # else:
+                #     eval_env.render()
                 
                 # Get action from model
                 # Extract the observation for a single environment from the batch
                 single_obs = obs[0] if isinstance(obs, np.ndarray) and obs.ndim > 1 else obs
                 action, _states = model.predict(single_obs, deterministic=True)
+                
+                # Collect data if requested
+                if collect_data:
+                    # Structure the observation into meaningful components
+                    structured_obs = {
+                        "state": {
+                            "s": float(single_obs[0]),  # Arc length
+                            "ey": float(single_obs[1]),  # Lateral offset
+                            "vel": float(single_obs[2]),  # Velocity
+                            "yaw_angle": float(single_obs[3])  # Yaw angle
+                        },
+                        "lidar_scan": single_obs[4:1084].tolist()  # Lidar scan (1080 points)
+                    }
+                    
+                    # If observation includes parameters (longer than state + lidar)
+                    if len(single_obs) > 1084:
+                        param_vector = single_obs[1084:].tolist()
+                        structured_obs["env_params"] = {
+                            "mu": param_vector[0],
+                            "C_Sf": param_vector[1],
+                            "C_Sr": param_vector[2],
+                            "m": param_vector[3],
+                            "I": param_vector[4],
+                            "lidar_noise_stddev": param_vector[5],
+                            "s_noise_stddev": param_vector[6],
+                            "ey_noise_stddev": param_vector[7],
+                            "vel_noise_stddev": param_vector[8],
+                            "yaw_noise_stddev": param_vector[9],
+                            "push_0_prob": param_vector[10],
+                            "push_2_prob": param_vector[11]
+                        }
+                    
+                    # Convert numpy arrays to lists for JSON serialization
+                    step_data = {
+                        "step": step_count,
+                        "observation": structured_obs,
+                        "action": {
+                            "steering": float(action[0]),
+                            "speed": float(action[1])
+                        },
+                        "reward": None,  # Will be filled after step
+                        "terminated": None,  # Will be filled after step
+                        "truncated": None  # Will be filled after step
+                    }
                 
                 # Take step in environment
                 if is_vec_env:
@@ -479,6 +535,15 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
                 
                 total_reward += reward
                 step_count += 1
+                
+                # Update step data with results if collecting data
+                if collect_data:
+                    step_data["reward"] = float(reward)
+                    step_data["terminated"] = terminated
+                    step_data["truncated"] = truncated
+                    
+                    # Don't include info field as requested
+                    episode_data["steps"].append(step_data)
             
             # Episode completed
             episode_time = time.time() - episode_start_time
@@ -492,6 +557,19 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
             logging.info(f"  Reward: {total_reward:.2f}")
             logging.info(f"  Length: {step_count} steps")
             logging.info(f"  Time: {episode_time:.2f} seconds")
+            
+            # Add completed episode data to collection
+            if collect_data:
+                # Add basic episode statistics
+                episode_data["total_reward"] = float(total_reward)
+                episode_data["episode_length"] = step_count
+                episode_data["episode_time"] = episode_time
+                
+                # Only record episodes with non-negative rewards
+                if total_reward >= 0:
+                    collected_data.append(episode_data)
+                else:
+                    logging.info(f"Skipping episode with negative reward: {total_reward:.2f}")
             
             # Reset for next episode
             print(f"Episode {episode+1} finished. Resetting...")
@@ -507,7 +585,21 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
     logging.info(f"  Mean episode length: {mean_episode_length:.2f} steps")
     logging.info(f"  Mean lap time: {mean_lap_time:.2f} seconds")
     
-    return {
+    # Save collected data if requested
+    if collect_data and data_save_path:
+        import json
+        import os
+        
+        # Create directory if it doesn't exist
+        os.makedirs(os.path.dirname(data_save_path), exist_ok=True)
+        
+        # Save data to JSON file
+        with open(data_save_path, 'w') as f:
+            json.dump(collected_data, f, indent=2)
+        
+        logging.info(f"Collected data saved to {data_save_path}")
+    
+    result = {
         "mean_reward": mean_reward,
         "std_reward": std_reward,
         "mean_episode_length": mean_episode_length,
@@ -516,6 +608,12 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
         "episode_lengths": episode_lengths,
         "lap_times": lap_times
     }
+    
+    # Add collected data to result if available
+    if collect_data:
+        result["collected_data"] = collected_data
+    
+    return result
 
 def initialize_with_imitation_learning(model, env, imitation_policy_type="PURE_PURSUIT", total_transitions=1000_000, racing_mode=False):
     """

@@ -17,7 +17,7 @@ class F110GymWrapper(gymnasium.Env):
                  map_path, 
                  num_agents, 
                  track: Track,
-                 max_episode_steps=1000,
+                 max_episode_steps=200,
                  # Racing Mode
                  racing_mode=False,
                  opponent_policy_type="PURE_PURSUIT",

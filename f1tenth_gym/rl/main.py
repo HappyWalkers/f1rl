@@ -46,6 +46,9 @@ flags.DEFINE_string("model_path", "./logs/best_model/best_model.zip", "Path to t
 flags.DEFINE_string("algorithm", "SAC", "Algorithm used (SAC, PPO, DDPG, TD3, WALL_FOLLOW, PURE_PURSUIT, LATTICE)")
 flags.DEFINE_integer("num_eval_episodes", 2, "Number of episodes to evaluate")
 
+# Add new flags for data collection
+flags.DEFINE_boolean("collect_data", False, "Collect observation and action data during evaluation")
+flags.DEFINE_string("data_save_path", "./evaluation_data.json", "Path to save the collected data (JSON format)")
 
 os.environ['F110GYM_PLOT_SCALE'] = str(60.)
 
@@ -94,11 +97,11 @@ def main(argv):
 
     # Create the environment wrapper
     # Base environment arguments (without domain randomization)
-    # map_name = map_info[config.map_ind][1].split('/')[0]
+    map_name = map_info[config.map_ind][1].split('/')[0]
     base_env_kwargs = {
         'waypoints': track.waypoints,
-        'map_path': config.map_dir + map_info[config.map_ind][1].split('.')[0],
-        # 'map_path': os.path.join(config.map_dir, map_name, map_name + "_map"),
+        # 'map_path': config.map_dir + map_info[config.map_ind][1].split('.')[0],
+        'map_path': os.path.join(config.map_dir, map_name, map_name + "_map"),
         'num_agents': FLAGS.num_agents,
         'track': track,
         'include_params_in_obs': FLAGS.include_params_in_obs,
@@ -120,12 +123,25 @@ def main(argv):
         racing_mode=FLAGS.racing_mode
     )
     if FLAGS.eval:
+        # Create a timestamp-based filename if collecting data
+        if FLAGS.collect_data:
+            import datetime
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            algorithm_name = FLAGS.algorithm.lower()
+            data_filename = f"eval_data_{algorithm_name}_racing{int(FLAGS.racing_mode)}_{timestamp}.json"
+            data_save_path = os.path.join(os.path.dirname(FLAGS.data_save_path), data_filename)
+            logging.info(f"Will collect data and save to {data_save_path}")
+        else:
+            data_save_path = None
+
         stablebaseline3.rl.evaluate(
             eval_env=vec_env,
             model_path=FLAGS.model_path,
             algorithm=FLAGS.algorithm,
             num_episodes=FLAGS.num_eval_episodes,
-            racing_mode=FLAGS.racing_mode
+            racing_mode=FLAGS.racing_mode,
+            collect_data=FLAGS.collect_data,
+            data_save_path=data_save_path
         )
     else:
         # Train with vectorized environments

@@ -14,7 +14,7 @@ class PurePursuitPolicy:
         self.track = track
         
         # Speed control
-        self.max_speed = 4.0
+        self.max_speed = 2.0
         self.min_speed = 0.5
         
         logging.info("Pure Pursuit policy initialized with Frenet frame support")
