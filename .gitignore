@@ -5,4 +5,5 @@
 *.png
 *.pth
 *.h5
+*.json
 *.pkl
