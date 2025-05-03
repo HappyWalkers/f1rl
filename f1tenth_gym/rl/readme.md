@@ -3,7 +3,6 @@
 ## Todo List
 * Simplify: Start by significantly reducing the depth and width of the networks inside F1TenthFeaturesExtractor. Try maybe 2 layers per branch with dimensions closer to your target features_dim (e.g., 256 -> 256).
 * Add Normalization: Add nn.LayerNorm layers within the feature extractor, perhaps after the linear layers or after the activations, to stabilize training.
-* Check Input Scaling: Verify the range and distribution of the different parts of your observation space. Consider if pre-processing or normalization before the feature extractor (or within its forward method) is needed.
 * multiple expert policy for IL
 * recurrent policy (skrl)
 
