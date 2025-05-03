@@ -43,6 +43,7 @@ flags.DEFINE_integer("map_index", 63, "Index of the map to use")
 flags.DEFINE_string("logging_level", "INFO", "Logging level")
 flags.DEFINE_boolean("eval", False, "Run only evaluation (no training)")
 flags.DEFINE_string("model_path", "./logs/best_model/best_model.zip", "Path to the model to evaluate")
+flags.DEFINE_string("vecnorm_path", None, "Path to the VecNormalize statistics file. If None, will try to infer from model_path.")
 flags.DEFINE_string("algorithm", "SAC", "Algorithm used (SAC, PPO, DDPG, TD3, WALL_FOLLOW, PURE_PURSUIT, LATTICE)")
 flags.DEFINE_integer("num_eval_episodes", 2, "Number of episodes to evaluate")
 
@@ -125,7 +126,8 @@ def main(argv):
             model_path=FLAGS.model_path,
             algorithm=FLAGS.algorithm,
             num_episodes=FLAGS.num_eval_episodes,
-            racing_mode=FLAGS.racing_mode
+            racing_mode=FLAGS.racing_mode,
+            vecnorm_path=FLAGS.vecnorm_path
         )
     else:
         # Train with vectorized environments

@@ -4,6 +4,7 @@ from stable_baselines3.common.callbacks import EvalCallback
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.vec_env import VecNormalize, unwrap_vec_normalize
 from functools import partial
 import os
 import time
@@ -15,7 +16,6 @@ from typing import Dict, List, Tuple, Type, Union, Callable, Optional, Any
 from gym import spaces
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from tqdm import tqdm
-
 from rl_env import F110GymWrapper # Import the wrapper
 
 
@@ -315,14 +315,14 @@ def create_td3(env, seed, include_params_in_obs=True):
 def create_sac(env, seed, include_params_in_obs=True):
     """Create a SAC model with custom neural network architecture"""
     policy_kwargs = {
-        # "features_extractor_class": F1TenthFeaturesExtractor,
-        # "features_extractor_kwargs": {
-        #     "features_dim": 1024,
-        #     "state_dim": 4,
-        #     "lidar_dim": 1080,
-        #     "param_dim": 12,
-        #     "include_params": include_params_in_obs
-        # },
+        "features_extractor_class": F1TenthFeaturesExtractor,
+        "features_extractor_kwargs": {
+            "features_dim": 1024,
+            "state_dim": 4,
+            "lidar_dim": 1080,
+            "param_dim": 12,
+            "include_params": include_params_in_obs
+        },
         "net_arch": [1024, 1024, 512, 512, 256, 256, 128, 128, 64, 64]
     }
     
@@ -356,7 +356,7 @@ def create_sac(env, seed, include_params_in_obs=True):
     )
     return model
 
-def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm="SAC", num_episodes=5, model=None, racing_mode=False):
+def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm="SAC", num_episodes=5, model=None, racing_mode=False, vecnorm_path=None):
     """
     Evaluates a trained model or wall-following policy on the environment.
     
@@ -367,11 +367,40 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
         num_episodes: Number of episodes to evaluate
         model: Optional pre-loaded model object (takes precedence over model_path)
         racing_mode: Whether to evaluate in racing mode with two cars
+        vecnorm_path: Path to the saved VecNormalize statistics file. If None, will look for a file
+                     in the same directory as model_path with "_vecnormalize.pkl" suffix.
     """
     # Set racing mode in environment if needed and not already set
     if racing_mode:
         logging.info("Evaluating in racing mode with two cars")
         eval_env.racing_mode = racing_mode
+    
+    # Try to load VecNormalize statistics if provided or can be inferred
+    from stable_baselines3.common.vec_env import VecNormalize, unwrap_vec_normalize
+    
+    # Check if eval_env is already a VecNormalize wrapper
+    vec_normalize = unwrap_vec_normalize(eval_env)
+    
+    if vec_normalize is None and vecnorm_path is None and model_path is not None:
+        # Try to infer vecnorm_path from model_path
+        model_dir = os.path.dirname(model_path)
+        potential_vecnorm_path = os.path.join(model_dir, "vec_normalize.pkl")
+        if os.path.exists(potential_vecnorm_path):
+            vecnorm_path = potential_vecnorm_path
+            logging.info(f"Found VecNormalize statistics at {vecnorm_path}")
+    
+    # Load VecNormalize if path is provided and environment isn't already normalized
+    if vecnorm_path is not None and vec_normalize is None:
+        if os.path.exists(vecnorm_path):
+            logging.info(f"Loading VecNormalize statistics from {vecnorm_path}")
+            # Load with norm_reward=False for evaluation
+            eval_env = VecNormalize.load(vecnorm_path, eval_env)
+            # Disable training and reward normalization for evaluation
+            eval_env.training = False
+            eval_env.norm_reward = False
+            logging.info("Environment wrapped with VecNormalize (training=False, norm_reward=False)")
+        else:
+            logging.warning(f"VecNormalize statistics file not found at {vecnorm_path}")
             
     # Check if eval_env is a VecEnv
     is_vec_env = isinstance(eval_env, (DummyVecEnv, SubprocVecEnv))
@@ -534,8 +563,20 @@ def initialize_with_imitation_learning(model, env, imitation_policy_type="PURE_P
         TypeError: If env is not a VecEnv instance
     """
     # Check if env is a VecEnv and raise an error if it's not
-    if not isinstance(env, (DummyVecEnv,SubprocVecEnv)):
+    if not isinstance(env, (DummyVecEnv, SubprocVecEnv, VecNormalize)):
         raise TypeError("env must be a VecEnv instance")
+    
+    # Check if environment is wrapped with VecNormalize
+    vec_normalize = unwrap_vec_normalize(env)
+    is_normalized = vec_normalize is not None
+    
+    if is_normalized:
+        logging.info("Environment is wrapped with VecNormalize. Expert policies will use raw observations.")
+        # Get the underlying VecEnv
+        raw_vec_env = vec_normalize.venv
+    else:
+        logging.info("Environment is not normalized.")
+        raw_vec_env = env
 
     # Import policies for imitation learning
     from wall_follow import WallFollowPolicy
@@ -545,9 +586,9 @@ def initialize_with_imitation_learning(model, env, imitation_policy_type="PURE_P
     # Initialize the expert policies for each environment
     logging.info(f"Starting imitation learning from {imitation_policy_type} policy (racing_mode={racing_mode})")
     expert_policies = []
-    for i in range(env.num_envs):
-        # Extract the track for this environment
-        track = env.get_attr("track", indices=i)[0]
+    for i in range(raw_vec_env.num_envs):
+        # Extract the track for this environment - use raw_vec_env to get attributes
+        track = raw_vec_env.get_attr("track", indices=i)[0]
         # Ensure the environment has the track object needed by the policies
         if not track:
             raise ValueError("Environment does not have a 'track' attribute required for policy imitation.")
@@ -567,48 +608,70 @@ def initialize_with_imitation_learning(model, env, imitation_policy_type="PURE_P
     demonstrations = []
     collected_transitions = 0
     
-    # Reset all environments
-    observations = env.reset()
+    # Reset all environments - use original env for training loop but get raw obs
+    if is_normalized:
+        # Reset both environments to keep them in sync
+        normalized_observations = env.reset()
+        raw_observations = raw_vec_env.reset()
+    else:
+        raw_observations = env.reset()
+        normalized_observations = raw_observations  # Same when not normalized
+    
     # Reset all expert policies
     for policy in expert_policies:
         if hasattr(policy, 'reset'):
             policy.reset()
     
-    dones = [False] * env.num_envs
+    dones = [False] * raw_vec_env.num_envs
     
-    logging.info(f"Collecting {total_transitions} transitions across {env.num_envs} environments")
+    logging.info(f"Collecting {total_transitions} transitions across {raw_vec_env.num_envs} environments")
     
     # Create progress bar for collecting transitions
     with tqdm(total=total_transitions, desc="Collecting Demonstration Transitions") as pbar:
         while collected_transitions < total_transitions:
             # Generate expert actions for each environment
             actions = []
-            for i in range(env.num_envs):
-                # Get action from the appropriate expert policy
-                action, _ = expert_policies[i].predict(observations[i], deterministic=True)
+            for i in range(raw_vec_env.num_envs):
+                # Get action from the appropriate expert policy using RAW observations
+                action, _ = expert_policies[i].predict(raw_observations[i], deterministic=True)
                 actions.append(action)
             
             # Convert to numpy array for VecEnv
             actions = np.array(actions)
             
-            # Step all environments together
-            next_observations, rewards, dones, infos = env.step(actions)
+            # Step the environment - using the normalized env for the main loop
+            next_normalized_observations, rewards, dones, infos = env.step(actions)
             
-            # Store transitions 
-            demonstrations.append((observations, actions, rewards, next_observations, dones))
+            # Also step the raw environment to keep them in sync if using normalization
+            if is_normalized:
+                next_raw_observations, _, _, _ = raw_vec_env.step(actions)
+            else:
+                next_raw_observations = next_normalized_observations  # Same when not normalized
+            
+            # Store transitions with normalized observations for the agent
+            demonstrations.append((normalized_observations, actions, rewards, next_normalized_observations, dones))
             
             # Update progress bar with number of new transitions
             new_transitions = env.num_envs
             collected_transitions += new_transitions
             pbar.update(new_transitions)
             
-            # reset the finished environments
+            # Reset the finished environments
             for i in range(env.num_envs):
                 if dones[i]:
-                    next_observations[i] = env.env_method('reset', indices=i)[0][0]
+                    if is_normalized:
+                        # Reset both environments to keep them in sync
+                        next_normalized_observations[i] = env.env_method('reset', indices=i)[0][0]
+                        next_raw_observations[i] = raw_vec_env.env_method('reset', indices=i)[0][0]
+                    else:
+                        next_normalized_observations[i] = env.env_method('reset', indices=i)[0][0]
+                        next_raw_observations[i] = next_normalized_observations[i]
+                    
                     if hasattr(expert_policies[i], 'reset'):
                         expert_policies[i].reset()
-            observations = next_observations
+            
+            normalized_observations = next_normalized_observations
+            raw_observations = next_raw_observations
     
     logging.info(f"Collected {collected_transitions} demonstration transitions")
 
@@ -660,7 +723,7 @@ def make_env(env_id, rank, seed=0, env_kwargs=None):
     # set_global_seeds(seed) # Deprecated in SB3
     return _init
 
-def create_vec_env(env_kwargs, seed, num_envs=1, num_param_cmbs=None, use_domain_randomization=False, include_params_in_obs=True, racing_mode=False):
+def create_vec_env(env_kwargs, seed, num_envs=1, num_param_cmbs=None, use_domain_randomization=False, include_params_in_obs=True, racing_mode=False, normalize_obs=True, normalize_reward=True):
     """
     Creates vectorized environments for training and evaluation.
 
@@ -673,9 +736,11 @@ def create_vec_env(env_kwargs, seed, num_envs=1, num_param_cmbs=None, use_domain
         use_domain_randomization (bool): Whether to randomize environment parameters.
         include_params_in_obs (bool): Whether to include environment parameters in observations.
         racing_mode (bool): Whether to use racing mode with two cars.
+        normalize_obs (bool): Whether to normalize observations.
+        normalize_reward (bool): Whether to normalize rewards.
 
     Returns:
-        VecEnv: The vectorized environment.
+        VecEnv: The vectorized environment, optionally wrapped with VecNormalize.
     """
     # If num_param_cmbs is not specified but DR is used, default to num_envs
     if num_param_cmbs is None and use_domain_randomization:
@@ -745,12 +810,26 @@ def create_vec_env(env_kwargs, seed, num_envs=1, num_param_cmbs=None, use_domain
         
     # Create the vectorized environment
     vec_env_cls = DummyVecEnv if num_envs == 1 else SubprocVecEnv
-    env = vec_env_cls(env_fns)
+    vec_env = vec_env_cls(env_fns)
     
-    return env
+    # Optionally wrap with VecNormalize
+    if normalize_obs or normalize_reward:
+        from stable_baselines3.common.vec_env import VecNormalize
+        vec_env = VecNormalize(
+            vec_env,
+            norm_obs=normalize_obs,
+            norm_reward=normalize_reward,
+            clip_obs=10.0,
+            clip_reward=10.0,
+            gamma=0.99,
+            epsilon=1e-8,
+        )
+        logging.info(f"Environment wrapped with VecNormalize (norm_obs={normalize_obs}, norm_reward={normalize_reward})")
+    
+    return vec_env
 
 # Updated train function to handle VecEnv and Domain Randomization
-def train(env, seed, num_envs=1, num_param_cmbs=None, use_domain_randomization=False, use_imitation_learning=True, imitation_policy_type="PURE_PURSUIT", algorithm="SAC", include_params_in_obs=True, racing_mode=False):
+def train(env, seed, num_envs=1, num_param_cmbs=None, use_domain_randomization=False, use_imitation_learning=True, imitation_policy_type="PURE_PURSUIT", algorithm="SAC", include_params_in_obs=True, racing_mode=False, normalize_obs=True, normalize_reward=True):
     """
     Trains the RL model.
 
@@ -766,6 +845,8 @@ def train(env, seed, num_envs=1, num_param_cmbs=None, use_domain_randomization=F
         algorithm (str): RL algorithm to use (e.g., SAC, PPO).
         include_params_in_obs (bool): Whether to include environment parameters in observations.
         racing_mode (bool): Whether to train in racing mode with two cars.
+        normalize_obs (bool): Whether to normalize observations.
+        normalize_reward (bool): Whether to normalize rewards.
     """
     # --- Create Model ---
     if algorithm == "PPO":
@@ -832,8 +913,20 @@ def train(env, seed, num_envs=1, num_param_cmbs=None, use_domain_randomization=F
                         if self.verbose > 0:
                             print(f"Saving new best model with mean reward: {mean_reward:.2f}")
                         self.model.save(os.path.join(self.model_save_path, "best_model"))
+                        
+                        # Save normalization statistics if the environment is wrapped with VecNormalize
+                        if isinstance(self.training_env, VecNormalize) or hasattr(self.training_env, 'venv') and isinstance(self.training_env.venv, VecNormalize):
+                            # Get the VecNormalize wrapper
+                            vec_normalize = self.training_env if isinstance(self.training_env, VecNormalize) else self.training_env.venv
+                            # Save the normalization statistics
+                            vec_normalize.save(os.path.join(self.model_save_path, "vec_normalize.pkl"))
+                            if self.verbose > 0:
+                                print(f"Saved VecNormalize statistics to {os.path.join(self.model_save_path, 'vec_normalize.pkl')}")
             
             return True
+
+    # Import VecNormalize for type checking
+    from stable_baselines3.common.vec_env import VecNormalize
 
     # Create the callback
     # Check frequency should be frequent enough to capture improvements but not too frequent
@@ -849,3 +942,18 @@ def train(env, seed, num_envs=1, num_param_cmbs=None, use_domain_randomization=F
         reset_num_timesteps=True, # Start timesteps from 0
         callback=save_callback
     )
+    
+    # Save final model and VecNormalize statistics
+    final_model_path = os.path.join("./logs", model_dir_name, "final_model")
+    os.makedirs(final_model_path, exist_ok=True)
+    model.save(os.path.join(final_model_path, "final_model"))
+    
+    # Save VecNormalize statistics if the environment is wrapped
+    if isinstance(env, VecNormalize):
+        env.save(os.path.join(final_model_path, "vec_normalize.pkl"))
+        logging.info(f"Saved final VecNormalize statistics to {os.path.join(final_model_path, 'vec_normalize.pkl')}")
+    
+    logging.info(f"Training completed. Final model saved to {os.path.join(final_model_path, 'final_model.zip')}")
+    logging.info(f"Best model saved to {os.path.join(best_model_path, 'best_model.zip')}")
+    
+    return model

@@ -1,4 +1,12 @@
 # F1RL
+
+## Todo List
+* Simplify: Start by significantly reducing the depth and width of the networks inside F1TenthFeaturesExtractor. Try maybe 2 layers per branch with dimensions closer to your target features_dim (e.g., 256 -> 256).
+* Add Normalization: Add nn.LayerNorm layers within the feature extractor, perhaps after the linear layers or after the activations, to stabilize training.
+* Check Input Scaling: Verify the range and distribution of the different parts of your observation space. Consider if pre-processing or normalization before the feature extractor (or within its forward method) is needed.
+* multiple expert policy for IL
+* recurrent policy (skrl)
+
 ## Experiment record:
 
 * Trained SAC agent achieves 16 s/lap in levine in simulation. When deployed, it achieves 30 s/lap. It exceeds our expectation because it didn't go through any fine tuning on the real car.
@@ -15,3 +23,4 @@
     * Some trials of using VAE to reconstruct state transitions (state, action, next state) proves that trajectories sampled from different environments have different distributions. This means that we can encode the environment-related information into the observation so that the rl agent can take different actions in different environments.
     * To encode trajectories into meaningful environment representations, a subtask is introduced. The subtask is predicting the environment parameters given trajectories. I use LSTM to do that because it can process varible-length trajectories and the hidden states may be useful. The cons of using LSTM is the GPU memory consumption is relatively high when training. 
     * Before integrating LSTM into rl training pipeline, the real environment parameters are included into the observations. However, the reward stays the same as before. Turning off IL leads to even worse reward. Maybe we should use different expert polices for different environments so that the rl agent can learn to adapt to different environments.
+    * feature extractor breaks the training
