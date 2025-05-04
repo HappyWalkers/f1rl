@@ -62,15 +62,6 @@ class F1TenthFeaturesExtractor(BaseFeaturesExtractor):
             nn.Linear(128, 256),
             nn.LayerNorm(256),
             nn.ReLU(),
-            nn.Linear(256, 512),
-            nn.LayerNorm(512),
-            nn.ReLU(),
-            nn.Linear(512, 1024),
-            nn.LayerNorm(1024),
-            nn.ReLU(),
-            nn.Linear(1024, 1024),
-            nn.LayerNorm(1024),
-            nn.ReLU()
         )
         
         # Network for processing LiDAR scan
@@ -113,17 +104,11 @@ class F1TenthFeaturesExtractor(BaseFeaturesExtractor):
             nn.Linear(lidar_dim, 1024),
             nn.LayerNorm(1024),
             nn.ReLU(),
-            nn.Linear(1024, 1024),
-            nn.LayerNorm(1024),
+            nn.Linear(1024, 512),
+            nn.LayerNorm(512),
             nn.ReLU(),
-            nn.Linear(1024, 1024),
-            nn.LayerNorm(1024),
-            nn.ReLU(),
-            nn.Linear(1024, 1024),
-            nn.LayerNorm(1024),
-            nn.ReLU(),
-            nn.Linear(1024, 1024),
-            nn.LayerNorm(1024),
+            nn.Linear(512, 256),
+            nn.LayerNorm(256),
             nn.ReLU(),
         )
         
@@ -136,34 +121,16 @@ class F1TenthFeaturesExtractor(BaseFeaturesExtractor):
                 nn.Linear(128, 256),
                 nn.LayerNorm(256),
                 nn.ReLU(),
-                nn.Linear(256, 512),
-                nn.LayerNorm(512),
-                nn.ReLU(),
-                nn.Linear(512, 1024),
-                nn.LayerNorm(1024),
-                nn.ReLU(),
-                nn.Linear(1024, 1024),
-                nn.LayerNorm(1024),
-                nn.ReLU()
             )
             # Combined dimension from all branches
-            combined_dim = 1024 * 3  # state + lidar + param
+            combined_dim = 256 * 3  # state + lidar + param
         else:
             self.param_net = None
-            combined_dim = 1024 * 2  # state + lidar
+            combined_dim = 256 * 2  # state + lidar
         
         # Final layers to combine all features
         self.combined_net = nn.Sequential(
             nn.Linear(combined_dim, 1024),
-            nn.LayerNorm(1024),
-            nn.ReLU(),
-            nn.Linear(1024, 1024),
-            nn.LayerNorm(1024),
-            nn.ReLU(),
-            nn.Linear(1024, 1024),
-            nn.LayerNorm(1024),
-            nn.ReLU(),
-            nn.Linear(1024, 1024),
             nn.LayerNorm(1024),
             nn.ReLU(),
             nn.Linear(1024, features_dim),
@@ -335,14 +302,14 @@ def create_td3(env, seed, include_params_in_obs=True):
 def create_sac(env, seed, include_params_in_obs=True):
     """Create a SAC model with custom neural network architecture"""
     policy_kwargs = {
-        # "features_extractor_class": F1TenthFeaturesExtractor,
-        # "features_extractor_kwargs": {
-        #     "features_dim": 1024,
-        #     "state_dim": 4,
-        #     "lidar_dim": 1080,
-        #     "param_dim": 12,
-        #     "include_params": include_params_in_obs
-        # },
+        "features_extractor_class": F1TenthFeaturesExtractor,
+        "features_extractor_kwargs": {
+            "features_dim": 1024,
+            "state_dim": 4,
+            "lidar_dim": 1080,
+            "param_dim": 12,
+            "include_params": include_params_in_obs
+        },
         "net_arch": [1024, 1024, 512, 512, 256, 256, 128, 128, 64, 64]
     }
     
