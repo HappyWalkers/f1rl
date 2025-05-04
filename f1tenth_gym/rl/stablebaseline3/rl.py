@@ -395,35 +395,37 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
         logging.info("Evaluating in racing mode with two cars")
         eval_env.racing_mode = racing_mode
     
-    # Try to load VecNormalize statistics if provided or can be inferred
-    from stable_baselines3.common.vec_env import VecNormalize, unwrap_vec_normalize
-    
-    # Check if eval_env is already a VecNormalize wrapper
-    vec_normalize = unwrap_vec_normalize(eval_env)
-    
-    if vec_normalize is None and vecnorm_path is None and model_path is not None:
-        # Try to infer vecnorm_path from model_path
+    # Load VecNormalize statistics if provided or can be inferred
+    from stable_baselines3.common.vec_env import VecNormalize
+
+    # Infer vecnorm_path from model_path if not explicitly provided
+    if vecnorm_path is None and model_path is not None:
         model_dir = os.path.dirname(model_path)
         potential_vecnorm_path = os.path.join(model_dir, "vec_normalize.pkl")
         if os.path.exists(potential_vecnorm_path):
             vecnorm_path = potential_vecnorm_path
             logging.info(f"Found VecNormalize statistics at {vecnorm_path}")
-    
-    # Load VecNormalize if path is provided and environment isn't already normalized
-    if vecnorm_path is not None and vec_normalize is None:
+
+    # Always load VecNormalize wrapper with loaded statistics for evaluation
+    if vecnorm_path is not None:
         if os.path.exists(vecnorm_path):
             logging.info(f"Loading VecNormalize statistics from {vecnorm_path}")
-            # Load with norm_reward=False for evaluation
-            eval_env = VecNormalize.load(vecnorm_path, eval_env)
-            # Disable training and reward normalization for evaluation
+            # Avoid double-wrapping: use base environment if already wrapped
+            try:
+                base_env = eval_env.venv
+            except AttributeError:
+                base_env = eval_env
+            # Load normalization wrapper with saved stats
+            eval_env = VecNormalize.load(vecnorm_path, base_env)
+            # Disable further updates and reward normalization
             eval_env.training = False
             eval_env.norm_reward = False
             logging.info("Environment wrapped with VecNormalize (training=False, norm_reward=False)")
         else:
             logging.warning(f"VecNormalize statistics file not found at {vecnorm_path}")
-            
+    
     # Check if eval_env is a VecEnv
-    is_vec_env = isinstance(eval_env, (DummyVecEnv, SubprocVecEnv))
+    is_vec_env = isinstance(eval_env, (DummyVecEnv, SubprocVecEnv, VecNormalize))
     num_envs = eval_env.num_envs if is_vec_env else 1
     
     if algorithm == "WALL_FOLLOW":
@@ -483,8 +485,10 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
             # Reset the environment
             if is_vec_env:
                 obs = eval_env.env_method('reset', indices=[env_idx])[0][0]  # Reset specific env
-                # Wrap single obs in list to match expected format
                 obs = np.array([obs])
+                # Manually normalize if the environment is VecNormalize
+                if isinstance(eval_env, VecNormalize):
+                    obs = eval_env.normalize_obs(obs)
             else:
                 obs = eval_env.reset()
             
@@ -516,8 +520,10 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
                     obs, reward, terminated, truncated, info = eval_env.env_method(
                         'step', action, indices=[env_idx]
                     )[0]
-                    # Wrap outputs to match expected format
                     obs = np.array([obs])
+                    # Manually normalize observation if needed
+                    if isinstance(eval_env, VecNormalize):
+                        obs = eval_env.normalize_obs(obs)
                     terminated = bool(terminated)
                     truncated = bool(truncated)
                     reward = float(reward)
