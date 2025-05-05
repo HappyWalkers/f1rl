@@ -494,10 +494,10 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
     else:
         logging.info("Using provided model for evaluation")
     
-    # Initialize metrics
-    episode_rewards = []
-    episode_lengths = []
-    lap_times = []
+    # Initialize metrics per environment
+    env_episode_rewards = [[] for _ in range(num_envs)]
+    env_episode_lengths = [[] for _ in range(num_envs)]
+    env_lap_times = [[] for _ in range(num_envs)]
     
     # Run evaluation episodes for each environment
     for env_idx in range(num_envs):
@@ -561,10 +561,10 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
             # Episode completed
             episode_time = time.time() - episode_start_time
             
-            # Record metrics
-            episode_rewards.append(total_reward)
-            episode_lengths.append(step_count)
-            lap_times.append(episode_time)
+            # Record metrics for this environment
+            env_episode_rewards[env_idx].append(total_reward)
+            env_episode_lengths[env_idx].append(step_count)
+            env_lap_times[env_idx].append(episode_time)
             
             logging.info(f"Episode {episode+1} finished:")
             logging.info(f"  Reward: {total_reward:.2f}")
@@ -574,13 +574,41 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
             # Reset for next episode
             print(f"Episode {episode+1} finished. Resetting...")
     
-    # Compute summary statistics
-    mean_reward = np.mean(episode_rewards)
-    std_reward = np.std(episode_rewards)
-    mean_episode_length = np.mean(episode_lengths)
-    mean_lap_time = np.mean(lap_times)
+    # Compute per-environment statistics
+    env_stats = []
+    for env_idx in range(num_envs):
+        env_mean_reward = np.mean(env_episode_rewards[env_idx])
+        env_std_reward = np.std(env_episode_rewards[env_idx])
+        env_mean_episode_length = np.mean(env_episode_lengths[env_idx])
+        env_mean_lap_time = np.mean(env_lap_times[env_idx])
+        
+        env_stats.append({
+            "env_idx": env_idx,
+            "mean_reward": env_mean_reward,
+            "std_reward": env_std_reward,
+            "mean_episode_length": env_mean_episode_length,
+            "mean_lap_time": env_mean_lap_time,
+            "episode_rewards": env_episode_rewards[env_idx],
+            "episode_lengths": env_episode_lengths[env_idx],
+            "lap_times": env_lap_times[env_idx]
+        })
+        
+        logging.info(f"Environment {env_idx+1} statistics:")
+        logging.info(f"  Mean reward: {env_mean_reward:.2f} ± {env_std_reward:.2f}")
+        logging.info(f"  Mean episode length: {env_mean_episode_length:.2f} steps")
+        logging.info(f"  Mean lap time: {env_mean_lap_time:.2f} seconds")
     
-    logging.info(f"Evaluation completed over {num_episodes * num_envs} episodes across {num_envs} environments:")
+    # Compute overall statistics by flattening all environment data
+    all_rewards = [reward for env_rewards in env_episode_rewards for reward in env_rewards]
+    all_lengths = [length for env_lengths in env_episode_lengths for length in env_lengths]
+    all_lap_times = [time for env_times in env_lap_times for time in env_times]
+    
+    mean_reward = np.mean(all_rewards)
+    std_reward = np.std(all_rewards)
+    mean_episode_length = np.mean(all_lengths)
+    mean_lap_time = np.mean(all_lap_times)
+    
+    logging.info(f"Overall evaluation completed over {num_episodes * num_envs} episodes across {num_envs} environments:")
     logging.info(f"  Mean reward: {mean_reward:.2f} ± {std_reward:.2f}")
     logging.info(f"  Mean episode length: {mean_episode_length:.2f} steps")
     logging.info(f"  Mean lap time: {mean_lap_time:.2f} seconds")
@@ -590,9 +618,10 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
         "std_reward": std_reward,
         "mean_episode_length": mean_episode_length,
         "mean_lap_time": mean_lap_time,
-        "episode_rewards": episode_rewards,
-        "episode_lengths": episode_lengths,
-        "lap_times": lap_times
+        "episode_rewards": all_rewards,
+        "episode_lengths": all_lengths,
+        "lap_times": all_lap_times,
+        "env_stats": env_stats  # Added per-environment statistics
     }
 
 def initialize_with_imitation_learning(model, env, imitation_policy_type="PURE_PURSUIT", total_transitions=1000_000, racing_mode=False):
