@@ -1,7 +1,6 @@
 # F1RL
 
 ## Todo List
-* multiplicative modulation for context and other observations
 * Auxiliary prediction head that reconstructs the physical parameters accelerates utilisation of context.
 * Analyse gradients – verify that ∂π/∂μ is non‑zero; if it vanishes, the architecture or loss needs adjustment.
 * recurrent policy (RecurrentPPO in sb3‑contrib)
