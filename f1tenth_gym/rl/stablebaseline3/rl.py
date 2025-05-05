@@ -19,6 +19,57 @@ from tqdm import tqdm
 from rl_env import F110GymWrapper # Import the wrapper
 
 
+class ResidualBlock(nn.Module):
+    """
+    A residual block with skip connections.
+    """
+    def __init__(self, in_features, hidden_features=None, out_features=None, use_layer_norm=True):
+        super().__init__()
+        hidden_features = hidden_features or in_features
+        out_features = out_features or in_features
+        
+        self.use_layer_norm = use_layer_norm
+        self.same_dim = (in_features == out_features)
+        
+        # Main branch
+        layers = []
+        layers.append(nn.Linear(in_features, hidden_features))
+        if use_layer_norm:
+            layers.append(nn.LayerNorm(hidden_features))
+        layers.append(nn.ReLU())
+        layers.append(nn.Linear(hidden_features, out_features))
+        if use_layer_norm:
+            layers.append(nn.LayerNorm(out_features))
+        
+        self.main_branch = nn.Sequential(*layers)
+        
+        # Skip connection with projection if needed
+        self.projection = None
+        if not self.same_dim:
+            self.projection = nn.Linear(in_features, out_features)
+            
+        # Final activation
+        self.relu = nn.ReLU()
+    
+    def forward(self, x):
+        identity = x
+        
+        # Main path
+        out = self.main_branch(x)
+        
+        # Skip connection with optional projection
+        if not self.same_dim:
+            identity = self.projection(identity)
+            
+        # Add skip connection
+        out += identity
+        
+        # Apply activation
+        out = self.relu(out)
+        
+        return out
+
+
 class F1TenthFeaturesExtractor(BaseFeaturesExtractor):
     """
     Custom feature extractor for the F1Tenth environment.
@@ -26,6 +77,16 @@ class F1TenthFeaturesExtractor(BaseFeaturesExtractor):
     This network separately processes state features, lidar scans, and environment parameters,
     then combines them into a single feature vector.
     """
+    @staticmethod
+    def _init_weights(m):
+        # Orthogonal initialization with ReLU gain and zero bias, matching SB3 defaults
+        if isinstance(m, nn.Linear):
+            nn.init.orthogonal_(m.weight, nn.init.calculate_gain('relu'))
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+            # Uncomment for debugging initialization:
+            # print(f"Initialized Linear layer with shape: {m.weight.shape}")
+
     def __init__(
         self,
         observation_space: spaces.Box,
@@ -54,62 +115,27 @@ class F1TenthFeaturesExtractor(BaseFeaturesExtractor):
             
         super().__init__(observation_space, features_dim)
         
-        # Network for processing state variables (s, ey, vel, yaw_angle)
+        # Network for processing state variables (s, ey, vel, yaw_angle) with residual connections
         self.state_net = nn.Sequential(
             nn.Linear(state_dim, 128),
             nn.LayerNorm(128),
             nn.ReLU(),
-            nn.Linear(128, 256),
-            nn.LayerNorm(256),
-            nn.ReLU(),
+            ResidualBlock(128, 256, 256),
+            ResidualBlock(256, 512, 512),
+            ResidualBlock(512, 1024, 1024),
+            ResidualBlock(1024, 1024, 1024),
         )
         
-        # Network for processing LiDAR scan
-        # # Use dilated convolutions to capture patterns at multiple scales
-        # self.lidar_net = nn.Sequential(
-        #     # Reshape lidar to [batch, 1, lidar_dim]
-        #     Reshape((-1, 1, lidar_dim)),
-            
-        #     nn.Conv1d(in_channels=1, out_channels=16, kernel_size=3, dilation=1, padding=1),
-        #     nn.ReLU(),
-            
-        #     nn.Conv1d(in_channels=16, out_channels=32, kernel_size=3, dilation=2, padding=2),
-        #     nn.ReLU(),
-            
-        #     nn.Conv1d(in_channels=32, out_channels=64, kernel_size=3, dilation=4, padding=4),
-        #     nn.ReLU(),
-            
-        #     nn.Conv1d(in_channels=64, out_channels=32, kernel_size=3, dilation=8, padding=8),
-        #     nn.ReLU(),
-            
-        #     nn.Conv1d(in_channels=32, out_channels=16, kernel_size=3, dilation=16, padding=16),
-        #     nn.ReLU(),
-            
-        #     # Dimensionality reduction
-        #     nn.Conv1d(in_channels=16, out_channels=8, kernel_size=9, stride=8, padding=4),
-        #     nn.ReLU(),
-            
-        #     # Flatten the output
-        #     nn.Flatten(),
-            
-        #     # Fully connected layers
-        #     nn.Linear(8 * 135, 128),  # 1080/8 = 135
-        #     nn.ReLU(),
-        #     nn.Linear(128, 128),
-        #     nn.ReLU()
-        # )
-        # Pure MLP architecture for processing LiDAR data
+        # Network for processing LiDAR scan with residual connections
         self.lidar_net = nn.Sequential(
             nn.Flatten(),
             nn.Linear(lidar_dim, 1024),
             nn.LayerNorm(1024),
             nn.ReLU(),
-            nn.Linear(1024, 512),
-            nn.LayerNorm(512),
-            nn.ReLU(),
-            nn.Linear(512, 256),
-            nn.LayerNorm(256),
-            nn.ReLU(),
+            ResidualBlock(1024, 1024, 1024),
+            ResidualBlock(1024, 1024, 1024),
+            ResidualBlock(1024, 1024, 1024),
+            ResidualBlock(1024, 1024, 1024),
         )
         
         # Network for processing environment parameters (if included)
@@ -118,25 +144,56 @@ class F1TenthFeaturesExtractor(BaseFeaturesExtractor):
                 nn.Linear(param_dim, 128),
                 nn.LayerNorm(128),
                 nn.ReLU(),
-                nn.Linear(128, 256),
-                nn.LayerNorm(256),
-                nn.ReLU(),
+                ResidualBlock(128, 256, 256),
+                ResidualBlock(256, 512, 512),
+                ResidualBlock(512, 1024, 1024),
+                ResidualBlock(1024, 1024, 1024),
             )
             # Combined dimension from all branches
-            combined_dim = 256 * 3  # state + lidar + param
+            combined_dim = 1024 * 3  # state + lidar + param
         else:
             self.param_net = None
-            combined_dim = 256 * 2  # state + lidar
+            combined_dim = 1024 * 2  # state + lidar
         
-        # Final layers to combine all features
+        # Final layers to combine all features with residual connections
         self.combined_net = nn.Sequential(
             nn.Linear(combined_dim, 1024),
             nn.LayerNorm(1024),
             nn.ReLU(),
+            ResidualBlock(1024, 1024, 1024),
+            ResidualBlock(1024, 1024, 1024),
+            ResidualBlock(1024, 1024, 1024),
             nn.Linear(1024, features_dim),
             nn.LayerNorm(features_dim),
             nn.ReLU()
         )
+
+        # Initialize feature extractor weights using the orthogonal initializer
+        logging.info("Initializing feature extractor weights")
+        linear_layer_count = 0
+        
+        def count_linear_layers(module):
+            nonlocal linear_layer_count
+            if isinstance(module, nn.Linear):
+                linear_layer_count += 1
+                
+        # Count linear layers before initialization
+        self.state_net.apply(count_linear_layers)
+        self.lidar_net.apply(count_linear_layers)
+        if self.param_net is not None:
+            self.param_net.apply(count_linear_layers)
+        self.combined_net.apply(count_linear_layers)
+        
+        logging.info(f"Total Linear layers to initialize: {linear_layer_count}")
+        
+        # Apply initialization
+        self.state_net.apply(self._init_weights)
+        self.lidar_net.apply(self._init_weights)
+        if self.param_net is not None:
+            self.param_net.apply(self._init_weights)
+        self.combined_net.apply(self._init_weights)
+        
+        logging.info("Feature extractor weights initialized")
 
     def forward(self, observations: torch.Tensor) -> torch.Tensor:
         # Extract different components from observation

@@ -1,8 +1,11 @@
 # F1RL
 
 ## Todo List
+* multiplicative modulation for context and other observations
+* Auxiliary prediction head that reconstructs the physical parameters accelerates utilisation of context.
+* Analyse gradients – verify that ∂π/∂μ is non‑zero; if it vanishes, the architecture or loss needs adjustment.
+* recurrent policy (RecurrentPPO in sb3‑contrib)
 * multiple expert policy for IL
-* recurrent policy (skrl)
 
 ## Experiment record:
 
@@ -20,4 +23,4 @@
     * Some trials of using VAE to reconstruct state transitions (state, action, next state) proves that trajectories sampled from different environments have different distributions. This means that we can encode the environment-related information into the observation so that the rl agent can take different actions in different environments.
     * To encode trajectories into meaningful environment representations, a subtask is introduced. The subtask is predicting the environment parameters given trajectories. I use LSTM to do that because it can process varible-length trajectories and the hidden states may be useful. The cons of using LSTM is the GPU memory consumption is relatively high when training. 
     * Before integrating LSTM into rl training pipeline, the real environment parameters are included into the observations. However, the reward stays the same as before. Turning off IL leads to even worse reward. Maybe we should use different expert polices for different environments so that the rl agent can learn to adapt to different environments.
-    * feature extractor breaks the training
+    * feature extractor breaks the training. However, reduce the size of network in feature extractor restore the training. 
