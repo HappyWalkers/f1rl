@@ -13,6 +13,7 @@ import datetime
 from tqdm import tqdm
 from rl_env import F110GymWrapper # Import the wrapper
 from stablebaseline3.feature_extractor import F1TenthFeaturesExtractor
+from sortedcontainers import SortedList
 
 def create_ppo(env, seed, include_params_in_obs=True):
     """Create a PPO model with custom neural network architecture"""
@@ -436,18 +437,45 @@ def initialize_with_imitation_learning(model, env, imitation_policy_type="PURE_P
     else:
         logging.info("Environment is not normalized.")
         raw_vec_env = env
+    
+    # Initialize expert policies
+    expert_policies = initialize_expert_policies(raw_vec_env, imitation_policy_type, racing_mode)
+    
+    # Collect demonstrations from the expert policies
+    logging.info(f"Collecting ~{total_transitions} transitions across {raw_vec_env.num_envs} environments")
+    demonstrations = collect_expert_rollouts(model, env, raw_vec_env, expert_policies, 
+                                           total_transitions, is_normalized)
+    
+    # Pretrain the model using the demonstrations
+    logging.info("Pretraining model with demonstrations")
+    model = pretrain_with_demonstrations(model, demonstrations)
+    
+    logging.info("Imitation learning completed")
+    return model
 
+def initialize_expert_policies(vec_env, imitation_policy_type, racing_mode):
+    """
+    Initialize expert policies for each environment.
+    
+    Args:
+        vec_env: The vector environment
+        imitation_policy_type: Type of imitation policy
+        racing_mode: Whether racing mode is enabled
+        
+    Returns:
+        List of expert policies
+    """
     # Import policies for imitation learning
     from wall_follow import WallFollowPolicy
     from pure_pursuit import PurePursuitPolicy
     from lattice_planner import LatticePlannerPolicy
 
     # Initialize the expert policies for each environment
-    logging.info(f"Starting imitation learning from {imitation_policy_type} policy (racing_mode={racing_mode})")
+    logging.info(f"Initializing {imitation_policy_type} expert policies (racing_mode={racing_mode})")
     expert_policies = []
-    for i in range(raw_vec_env.num_envs):
-        # Extract the track for this environment - use raw_vec_env to get attributes
-        track = raw_vec_env.get_attr("track", indices=i)[0]
+    for i in range(vec_env.num_envs):
+        # Extract the track for this environment
+        track = vec_env.get_attr("track", indices=i)[0]
         # Ensure the environment has the track object needed by the policies
         if not track:
             raise ValueError("Environment does not have a 'track' attribute required for policy imitation.")
@@ -462,103 +490,227 @@ def initialize_with_imitation_learning(model, env, imitation_policy_type="PURE_P
             expert_policies.append(LatticePlannerPolicy(track=track))
         else:
             raise ValueError(f"Unsupported imitation_policy_type: {imitation_policy_type}")
+    
+    return expert_policies
 
-    # Collect demonstrations from the expert policies
-    demonstrations = []
-    collected_transitions = 0
+def collect_expert_rollouts(model, env, raw_vec_env, expert_policies, total_transitions, is_normalized):
+    """
+    Collect rollouts from expert policies and filter by reward.
     
-    # Reset all environments - use original env for training loop but get raw obs
-    if is_normalized:
-        # Reset both environments to keep them in sync
-        normalized_observations = env.reset()
-        raw_observations = raw_vec_env.reset()
-    else:
-        raw_observations = env.reset()
-        normalized_observations = raw_observations  # Same when not normalized
+    Args:
+        model: The RL model
+        env: The normalized environment (if normalization is used)
+        raw_vec_env: The raw vector environment
+        expert_policies: List of expert policies
+        total_transitions: Target total number of transitions to collect
+        is_normalized: Whether environment is normalized
+        
+    Returns:
+        List of demonstrations (transitions from successful rollouts)
+    """
+    # Calculate per-environment transition quota to ensure balanced data collection
+    num_envs = raw_vec_env.num_envs
+    transitions_per_env = total_transitions // num_envs
     
-    # Reset all expert policies
-    for policy in expert_policies:
-        if hasattr(policy, 'reset'):
-            policy.reset()
+    # Track collected transitions for each environment
+    env_transitions_collected = [0] * num_envs
     
-    dones = [False] * raw_vec_env.num_envs
-    
-    logging.info(f"Collecting {total_transitions} transitions across {raw_vec_env.num_envs} environments")
-    
+    # Use sorted lists to store the best rollouts for each environment
+    # Each rollout is a tuple of (total_reward, transitions)
+    env_rollouts = [SortedList(key=lambda x: x[0]) for _ in range(num_envs)]
+
     # Create progress bar for collecting transitions
-    with tqdm(total=total_transitions, desc="Collecting Demonstration Transitions") as pbar:
-        while collected_transitions < total_transitions:
-            # Generate expert actions for each environment
-            actions = []
-            for i in range(raw_vec_env.num_envs):
-                # Get action from the appropriate expert policy using RAW observations
-                action, _ = expert_policies[i].predict(raw_observations[i], deterministic=True)
-                actions.append(action)
+    with tqdm(total=total_transitions, desc="Collecting Expert Demonstration Rollouts") as pbar:
+        while min(env_transitions_collected) < transitions_per_env - 1000:
+            # Buffer for current rollouts, one per environment
+            current_rollouts = [[] for _ in range(num_envs)]
+            current_rollout_rewards = [0.0 for _ in range(num_envs)]
             
-            # Convert to numpy array for VecEnv
-            actions = np.array(actions)
+            # Start a new episode by resetting the normalized environment
+            normalized_observations = env.reset()
             
-            # Step the environment - using the normalized env for the main loop
-            next_normalized_observations, rewards, dones, infos = env.step(actions)
-            
-            # Also step the raw environment to keep them in sync if using normalization
+            # Get original (unnormalized) observations
             if is_normalized:
-                next_raw_observations, _, _, _ = raw_vec_env.step(actions)
+                raw_observations = env.get_original_obs()
             else:
-                next_raw_observations = next_normalized_observations  # Same when not normalized
+                raw_observations = normalized_observations
+                
+            # Reset all expert policies
+            for policy in expert_policies:
+                if hasattr(policy, 'reset'):
+                    policy.reset()
             
-            # Store transitions with normalized observations for the agent
-            demonstrations.append((normalized_observations, actions, rewards, next_normalized_observations, dones))
+            # Active environment tracker
+            active_envs = [True] * num_envs
             
-            # Update progress bar with number of new transitions
-            new_transitions = env.num_envs
-            collected_transitions += new_transitions
-            pbar.update(new_transitions)
-            
-            # Reset the finished environments
-            for i in range(env.num_envs):
-                if dones[i]:
-                    if is_normalized:
-                        # Reset both environments to keep them in sync
-                        next_normalized_observations[i] = env.env_method('reset', indices=i)[0][0]
-                        next_raw_observations[i] = raw_vec_env.env_method('reset', indices=i)[0][0]
-                    else:
-                        next_normalized_observations[i] = env.env_method('reset', indices=i)[0][0]
-                        next_raw_observations[i] = next_normalized_observations[i]
-                    
-                    if hasattr(expert_policies[i], 'reset'):
-                        expert_policies[i].reset()
-            
-            normalized_observations = next_normalized_observations
-            raw_observations = next_raw_observations
+            # Run episodes until completion in all environments
+            while any(active_envs):
+                # Generate expert actions for active environments
+                actions = np.zeros((num_envs,) + env.action_space.shape)
+                
+                for i in range(num_envs):
+                    if active_envs[i]:
+                        # Get action from the expert policy using RAW observations
+                        action, _ = expert_policies[i].predict(raw_observations[i], deterministic=True)
+                        actions[i] = action
+                
+                # Step only the normalized environment
+                next_normalized_observations, normalized_rewards, dones, infos = env.step(actions)
+                
+                # Get the original (unnormalized) observations
+                if is_normalized:
+                    next_raw_observations = env.get_original_obs()
+                    raw_rewards = env.get_original_reward()
+                else:
+                    next_raw_observations = next_normalized_observations
+                    raw_rewards = normalized_rewards
+                
+                # Store transitions for active environments
+                for i in range(num_envs):
+                    if active_envs[i]:
+                        # Add the transition to the current rollout
+                        current_rollouts[i].append((
+                            normalized_observations[i], 
+                            actions[i], 
+                            normalized_rewards[i], 
+                            next_normalized_observations[i], 
+                            dones[i]
+                        ))
+                        current_rollout_rewards[i] += raw_rewards[i]
+                        
+                        # Check if episode finished
+                        if dones[i]:
+                            logging.debug(f"Episode {i} finished with reward {current_rollout_rewards[i]}")
+                            active_envs[i] = False
+                            
+                            # Only keep rollouts with positive rewards
+                            if current_rollout_rewards[i] > -100:
+                                # Add to the sorted list
+                                env_rollouts[i].add((current_rollout_rewards[i], current_rollouts[i]))
+                                
+                                # If we have too many rollouts, remove the worst one
+                                while (sum(len(rollout) for _, rollout in env_rollouts[i]) > transitions_per_env):
+                                    _, removed_rollout = env_rollouts[i].pop(0)  # Remove rollout with lowest reward
+                                    
+                                # Update collected transitions for this environment
+                                old_transitions = env_transitions_collected[i]
+                                env_transitions_collected[i] = sum(len(rollout) for _, rollout in env_rollouts[i])
+                                
+                                # Update the progress bar with the actual number of new transitions kept
+                                new_transitions = env_transitions_collected[i] - old_transitions
+                                pbar.update(new_transitions)
+                                if int(pbar.n / pbar.total * 100) % 10 == 0:
+                                    log_message = ", ".join(f"env{i}: {env_transitions_collected[i]}/{transitions_per_env}" for i in range(num_envs))
+                                    logging.info(f"Collection Progress: {log_message}")
+                                
+                
+                # Update observations for next step
+                normalized_observations = next_normalized_observations
+                raw_observations = next_raw_observations
     
-    logging.info(f"Collected {collected_transitions} demonstration transitions")
+    # --- Start of new section for batching demonstrations ---
+    num_envs_for_batching = raw_vec_env.num_envs # Ensure we use the correct num_envs
 
-    # Pretrain the model using the demonstrations
-    logging.info("Pretraining model with demonstrations")
+    # 1. Extract all transitions per environment from env_rollouts
+    # Each element in env_rollouts is a SortedList of (reward, rollout_data)
+    # rollout_data is a list of transitions: (obs, action, reward, next_obs, done)
+    transitions_by_env = [[] for _ in range(num_envs_for_batching)]
+    for env_idx, rollout_list_for_env in enumerate(env_rollouts):
+        for _reward_val, rollout_data in rollout_list_for_env: 
+            for transition in rollout_data: 
+                transitions_by_env[env_idx].append(transition)
 
-    # For models with replay buffers, add the demonstrations
+    # 2. Determine the number of full batches we can form
+    # Check if any environment has no transitions collected or if num_envs_for_batching is not positive
+    if not num_envs_for_batching > 0 or not all(transitions_by_env) or any(len(t_list) == 0 for t_list in transitions_by_env) :
+        logging.warning("One or more environments have no successful rollouts, or no environments processed. "
+                        "Cannot form batches for pretraining. Pretraining steps requiring the replay buffer will be skipped.")
+        return [] # Return empty list; pretraining loop won't run
+
+    min_transitions_per_env = min(len(trans_list) for trans_list in transitions_by_env)
+
+    if min_transitions_per_env == 0:
+        # This case should ideally be covered by the comprehensive check above, but acts as a safeguard.
+        logging.warning("Not enough transitions across all environments to form batches (min is 0 after filtering). "
+                        "Pretraining steps requiring the replay buffer will be skipped.")
+        return []
+
+    # 3. Form batches
+    batched_demonstrations = []
+    for i in range(min_transitions_per_env):
+        batch_obs_list = []
+        batch_action_list = []
+        batch_reward_list = []
+        batch_next_obs_list = []
+        batch_done_list = []
+
+        for env_j in range(num_envs_for_batching):
+            # Each transition is (obs, action, reward, next_obs, done)
+            obs, action, reward, next_obs, done = transitions_by_env[env_j][i]
+            batch_obs_list.append(obs)
+            batch_action_list.append(action)
+            batch_reward_list.append(reward)
+            batch_next_obs_list.append(next_obs)
+            batch_done_list.append(done)
+        
+        # Stack to create numpy arrays for the batch
+        batched_demonstrations.append((
+            np.array(batch_obs_list),      # Shape: (num_envs, obs_dim)
+            np.array(batch_action_list),   # Shape: (num_envs, action_dim)
+            np.array(batch_reward_list),   # Shape: (num_envs,)
+            np.array(batch_next_obs_list), # Shape: (num_envs, obs_dim)
+            np.array(batch_done_list)      # Shape: (num_envs,)
+        ))
+
+    total_batched_transitions = min_transitions_per_env * num_envs_for_batching
+    logging.info(f"Collected and batched {total_batched_transitions} demonstration transitions, "
+                 f"forming {min_transitions_per_env} batches of size {num_envs_for_batching}.")
+    
+    return batched_demonstrations
+    # --- End of new section ---
+
+def pretrain_with_demonstrations(model, demonstrations):
+    """
+    Pretrain the model using filtered demonstrations.
+    
+    Args:
+        model: The RL model to train
+        demonstrations: List of transitions from successful rollouts
+        
+    Returns:
+        Trained model
+    """
     if hasattr(model, 'replay_buffer'):
-        for obs, action, reward, next_obs, done in demonstrations:
-            model.replay_buffer.add(obs, next_obs, action, reward, done, [{}])
+        if not demonstrations: # Check if demonstrations list is empty (it's a list of batches)
+            logging.info("No demonstration batches to pretrain on. Skipping replay buffer population and subsequent training on demonstrations.")
+        else:
+            # demonstrations is now a list of (batch_obs, batch_action, batch_reward, batch_next_obs, batch_done)
+            logging.info(f"Adding {len(demonstrations)} batches of demonstrations to the replay buffer.")
+            for batch_obs, batch_action, batch_reward, batch_next_obs, batch_done in demonstrations:
+                # batch_obs, batch_action, etc. are already numpy arrays with shape (num_envs, ...)
+                num_envs_in_batch = batch_obs.shape[0]
+                infos = [{} for _ in range(num_envs_in_batch)] # Create a list of info dicts for the batch
+                model.replay_buffer.add(batch_obs, batch_next_obs, batch_action, batch_reward, batch_done, infos)
+            
+            # Perform gradient steps on the demonstrations, only if model has a train method
+            if hasattr(model, 'train'):
+                logging.info("Training on demonstrations")
+                # Initialize the model by calling learn with 1 step before training
+                # This ensures the logger and other components are properly set up.
+                # reset_num_timesteps defaults to True for the first call to model.learn(), which is appropriate here.
+                model.learn(total_timesteps=1, log_interval=1) 
+                
+                # Now we can safely call train
+                gradient_steps = 10_000 # This can be made configurable if needed
+                with tqdm(total=gradient_steps, desc="Imitation Learning Progress") as pbar:
+                    for _ in range(gradient_steps): 
+                        model.train(gradient_steps=1, batch_size=model.batch_size)
+                        pbar.update(1)
+            else:
+                logging.info("Model does not have a 'train' method. Skipping gradient steps on demonstrations.")
+    else:
+        logging.info("Model does not have a replay buffer. Skipping pretraining with demonstrations.")
 
-        # Perform gradient steps on the demonstrations
-        if hasattr(model, 'train'):
-            logging.info("Training on demonstrations")
-            # Initialize the model by calling learn with 1 step before training
-            # This ensures the logger and other components are properly set up
-            model.learn(total_timesteps=1, log_interval=1)
-            # Now we can safely call train
-            gradient_steps = 10_000
-            # Create a progress bar for training
-            with tqdm(total=gradient_steps, desc="Imitation Learning Progress") as pbar:
-                for i in range(0, gradient_steps, 1):
-                    # Perform training step
-                    model.train(gradient_steps=1, batch_size=model.batch_size)
-                    # Update progress bar
-                    pbar.update(1)
-
-    logging.info("Imitation learning completed")
     return model
 
 def make_env(env_id, rank, seed=0, env_kwargs=None):

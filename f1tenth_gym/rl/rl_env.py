@@ -490,6 +490,13 @@ class F110GymWrapper(gymnasium.Env):
         else:
             # Original done condition
             done = bool(done or collision)
+            
+        info["reward"] = reward
+        info["done"] = done
+        info["truncated"] = truncated
+        info["current_step"] = self.current_step
+        info["max_steps"] = self._max_episode_steps
+        info["collision"] = collision
 
         return processed_obs, reward, done, truncated, info # Gymnasium expects 5 return values
 
