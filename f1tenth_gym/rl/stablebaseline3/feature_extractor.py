@@ -6,6 +6,39 @@ from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from absl import logging
 
 
+class FiLMLayer(nn.Module):
+    """
+    Feature-wise Linear Modulation (FiLM) layer.
+    
+    Applies affine transformation to input features based on conditioning signals.
+    FiLM(x) = gamma * x + beta, where gamma and beta are derived from the conditioning signal.
+    """
+    def __init__(self, feature_dim, condition_dim, hidden_dim=None):
+        super().__init__()
+        self.feature_dim = feature_dim
+        self.condition_dim = condition_dim
+        hidden_dim = hidden_dim or condition_dim * 2
+        
+        # Network to generate gamma and beta from conditioning signal
+        self.condition_net = nn.Sequential(
+            nn.Linear(condition_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, feature_dim * 2)  # Outputs gamma and beta
+        )
+        
+    def forward(self, x, condition):
+        # Generate gamma and beta from conditioning signal
+        film_params = self.condition_net(condition)
+        
+        # Split into gamma and beta
+        gamma, beta = torch.chunk(film_params, 2, dim=-1)
+        
+        # Apply feature-wise affine transformation
+        # Adding 1 to gamma for better gradient flow (now it modulates around 1 instead of 0)
+        return (1 + gamma) * x + beta
+
+
 class ResidualBlock(nn.Module):
     """
     A residual block with skip connections.
@@ -61,8 +94,8 @@ class F1TenthFeaturesExtractor(BaseFeaturesExtractor):
     """
     Custom feature extractor for the F1Tenth environment.
     
-    This network separately processes state features, lidar scans, and environment parameters,
-    then combines them into a single feature vector.
+    This network separately processes state features and lidar scans, and conditions them
+    with environment parameters using FiLM (Feature-wise Linear Modulation).
     """
     @staticmethod
     def _init_weights(m):
@@ -102,52 +135,61 @@ class F1TenthFeaturesExtractor(BaseFeaturesExtractor):
             
         super().__init__(observation_space, features_dim)
         
-        # Network for processing state variables (s, ey, vel, yaw_angle) with residual connections
-        self.state_net = nn.Sequential(
-            nn.Linear(state_dim, 128),
-            nn.LayerNorm(128),
+        # Define initial feature dimensions
+        state_initial_dim = 128
+        lidar_initial_dim = 1024
+        
+        # Initial processing of state features
+        self.state_initial = nn.Sequential(
+            nn.Linear(state_dim, state_initial_dim),
+            nn.LayerNorm(state_initial_dim),
             nn.ReLU(),
-            ResidualBlock(128, 256, 256),
-            ResidualBlock(256, 512, 512),
-            ResidualBlock(512, 1024, 1024),
-            ResidualBlock(1024, 1024, 1024),
         )
         
-        # Network for processing LiDAR scan with residual connections
-        self.lidar_net = nn.Sequential(
+        # Initial processing of LiDAR scan
+        self.lidar_initial = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(lidar_dim, 1024),
-            nn.LayerNorm(1024),
+            nn.Linear(lidar_dim, lidar_initial_dim),
+            nn.LayerNorm(lidar_initial_dim),
             nn.ReLU(),
-            ResidualBlock(1024, 1024, 1024),
-            ResidualBlock(1024, 1024, 1024),
-            ResidualBlock(1024, 1024, 1024),
-            ResidualBlock(1024, 1024, 1024),
         )
         
-        # Network for processing environment parameters (if included)
+        # Parameter conditioning network (if parameters are included)
         if include_params:
-            self.param_net = nn.Sequential(
+            # Initial parameter processing
+            self.param_initial = nn.Sequential(
                 nn.Linear(param_dim, 128),
                 nn.LayerNorm(128),
                 nn.ReLU(),
                 ResidualBlock(128, 256, 256),
-                ResidualBlock(256, 512, 512),
+            )
+            
+            # FiLM layers for conditioning state and lidar features
+            self.state_film = FiLMLayer(state_initial_dim, 256)
+            self.lidar_film = FiLMLayer(lidar_initial_dim, 256)
+        
+        # Residual blocks for state processing after conditioning
+        self.state_residual = nn.Sequential(
+            ResidualBlock(state_initial_dim, 256, 512),
                 ResidualBlock(512, 1024, 1024),
                 ResidualBlock(1024, 1024, 1024),
             )
-            # Combined dimension from all branches
-            combined_dim = 1024 * 3  # state + lidar + param
-        else:
-            self.param_net = None
-            combined_dim = 1024 * 2  # state + lidar
+        
+        # Residual blocks for lidar processing after conditioning
+        self.lidar_residual = nn.Sequential(
+            ResidualBlock(lidar_initial_dim, 1024, 1024),
+            ResidualBlock(1024, 1024, 1024),
+            ResidualBlock(1024, 1024, 1024),
+        )
+        
+        # Combined dimension from all branches
+        combined_dim = 1024 * 2  # state + lidar
         
         # Final layers to combine all features with residual connections
         self.combined_net = nn.Sequential(
             nn.Linear(combined_dim, 1024),
             nn.LayerNorm(1024),
             nn.ReLU(),
-            ResidualBlock(1024, 1024, 1024),
             ResidualBlock(1024, 1024, 1024),
             ResidualBlock(1024, 1024, 1024),
             nn.Linear(1024, features_dim),
@@ -165,19 +207,27 @@ class F1TenthFeaturesExtractor(BaseFeaturesExtractor):
                 linear_layer_count += 1
                 
         # Count linear layers before initialization
-        self.state_net.apply(count_linear_layers)
-        self.lidar_net.apply(count_linear_layers)
-        if self.param_net is not None:
-            self.param_net.apply(count_linear_layers)
+        self.state_initial.apply(count_linear_layers)
+        self.lidar_initial.apply(count_linear_layers)
+        self.state_residual.apply(count_linear_layers)
+        self.lidar_residual.apply(count_linear_layers)
+        if include_params:
+            self.param_initial.apply(count_linear_layers)
+            self.state_film.apply(count_linear_layers)
+            self.lidar_film.apply(count_linear_layers)
         self.combined_net.apply(count_linear_layers)
         
         logging.info(f"Total Linear layers to initialize: {linear_layer_count}")
         
         # Apply initialization
-        self.state_net.apply(self._init_weights)
-        self.lidar_net.apply(self._init_weights)
-        if self.param_net is not None:
-            self.param_net.apply(self._init_weights)
+        self.state_initial.apply(self._init_weights)
+        self.lidar_initial.apply(self._init_weights)
+        self.state_residual.apply(self._init_weights)
+        self.lidar_residual.apply(self._init_weights)
+        if include_params:
+            self.param_initial.apply(self._init_weights)
+            self.state_film.apply(self._init_weights)
+            self.lidar_film.apply(self._init_weights)
         self.combined_net.apply(self._init_weights)
         
         logging.info("Feature extractor weights initialized")
@@ -187,22 +237,25 @@ class F1TenthFeaturesExtractor(BaseFeaturesExtractor):
         state_features = observations[:, :self.state_dim]
         lidar_features = observations[:, self.state_dim:self.state_dim + self.lidar_dim]
         
-        # Process state features
-        state_output = self.state_net(state_features)
-        
-        # Process lidar features
-        lidar_output = self.lidar_net(lidar_features)
+        # Initial processing
+        state_output = self.state_initial(state_features)
+        lidar_output = self.lidar_initial(lidar_features)
         
         if self.include_params:
             # Extract and process environment parameters
             param_features = observations[:, self.state_dim + self.lidar_dim:]
-            param_output = self.param_net(param_features)
+            param_output = self.param_initial(param_features)
             
-            # Combine all features
-            combined_features = torch.cat([state_output, lidar_output, param_output], dim=1)
-        else:
-            # Combine only state and lidar features
-            combined_features = torch.cat([state_output, lidar_output], dim=1)
+            # Apply FiLM conditioning - parameters modulate state and lidar features
+            state_output = self.state_film(state_output, param_output)
+            lidar_output = self.lidar_film(lidar_output, param_output)
+        
+        # Apply residual blocks after conditional modulation
+        state_output = self.state_residual(state_output)
+        lidar_output = self.lidar_residual(lidar_output)
+        
+        # Combine modulated features
+        combined_features = torch.cat([state_output, lidar_output], dim=1)
         
         # Final processing
         output = self.combined_net(combined_features)

@@ -948,7 +948,7 @@ def train(env, seed, num_envs=1, num_param_cmbs=None, use_domain_randomization=F
     )
 
     model.learn(
-        total_timesteps=10_000_000,
+        total_timesteps=100_000_000,
         log_interval=10, # Log less frequently for VecEnv
         reset_num_timesteps=True, # Start timesteps from 0
         callback=save_callback
