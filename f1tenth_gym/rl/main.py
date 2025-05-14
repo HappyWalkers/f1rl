@@ -38,14 +38,15 @@ flags.DEFINE_integer("num_param_cmbs", 24, "Number of parameter combinations to 
 flags.DEFINE_boolean("include_params_in_obs", True, "Include environment parameters in observations for contextual RL")
 flags.DEFINE_boolean("racing_mode", False, "Enable racing mode with two cars")
 
+flags.DEFINE_boolean("eval", False, "Run only evaluation (no training)")
+flags.DEFINE_integer("num_eval_episodes", 2, "Number of episodes to evaluate")
 flags.DEFINE_integer("seed", 42, "Random seed for reproducibility")
 flags.DEFINE_integer("map_index", 63, "Index of the map to use")
 flags.DEFINE_string("logging_level", "INFO", "Logging level")
-flags.DEFINE_boolean("eval", False, "Run only evaluation (no training)")
 flags.DEFINE_string("model_path", "./logs/best_model/best_model.zip", "Path to the model to evaluate")
 flags.DEFINE_string("vecnorm_path", "./logs/best_model/vec_normalize.pkl", "Path to the VecNormalize statistics file. If None, will try to infer from model_path.")
-flags.DEFINE_string("algorithm", "SAC", "Algorithm used (SAC, PPO, DDPG, TD3, WALL_FOLLOW, PURE_PURSUIT, LATTICE)")
-flags.DEFINE_integer("num_eval_episodes", 2, "Number of episodes to evaluate")
+flags.DEFINE_enum("algorithm", "SAC", ["SAC", "PPO", "DDPG", "TD3", "WALL_FOLLOW", "PURE_PURSUIT", "LATTICE"], "Algorithm used")
+flags.DEFINE_enum("feature_extractor", "MOE", ["MLP", "RESNET", "FILM", "TRANSFORMER", "MOE"], "Feature extractor architecture to use")
 
 
 os.environ['F110GYM_PLOT_SCALE'] = str(60.)
@@ -141,7 +142,8 @@ def main(argv):
             imitation_policy_type=FLAGS.il_policy,
             algorithm=FLAGS.algorithm,
             include_params_in_obs=FLAGS.include_params_in_obs,
-            racing_mode=FLAGS.racing_mode
+            racing_mode=FLAGS.racing_mode,
+            feature_extractor_name=FLAGS.feature_extractor
         )
 
 

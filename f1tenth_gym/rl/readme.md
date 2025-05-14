@@ -2,7 +2,6 @@
 
 ## Todo List
 * only disturb one param
-* transformer
 * Auxiliary prediction head that reconstructs the physical parameters accelerates utilisation of context.
 * Analyse gradients – verify that ∂π/∂μ is non‑zero; if it vanishes, the architecture or loss needs adjustment.
 * recurrent policy (RecurrentPPO in sb3‑contrib)

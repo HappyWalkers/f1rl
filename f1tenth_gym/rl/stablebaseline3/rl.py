@@ -12,10 +12,27 @@ import numpy as np
 import datetime
 from tqdm import tqdm
 from rl_env import F110GymWrapper # Import the wrapper
-from stablebaseline3.feature_extractor import F1TenthFeaturesExtractor
+from stablebaseline3.feature_extractor import F1TenthFeaturesExtractor, MLPFeaturesExtractor, ResNetFeaturesExtractor, TransformerFeaturesExtractor, MoEFeaturesExtractor
 from sortedcontainers import SortedList
 
-def create_ppo(env, seed, include_params_in_obs=True):
+# Function to select feature extractor based on name
+def get_feature_extractor_class(feature_extractor_name):
+    """Returns the appropriate feature extractor class based on the name."""
+    if feature_extractor_name == "FILM":
+        return F1TenthFeaturesExtractor
+    elif feature_extractor_name == "MLP":
+        return MLPFeaturesExtractor
+    elif feature_extractor_name == "RESNET":
+        return ResNetFeaturesExtractor
+    elif feature_extractor_name == "TRANSFORMER":
+        return TransformerFeaturesExtractor
+    elif feature_extractor_name == "MOE":
+        return MoEFeaturesExtractor
+    else:
+        logging.warning(f"Unknown feature extractor: {feature_extractor_name}, defaulting to FILM")
+        return F1TenthFeaturesExtractor
+
+def create_ppo(env, seed, include_params_in_obs=True, feature_extractor_name="FILM"):
     """Create a PPO model with custom neural network architecture"""
     # Determine if the environment observation includes parameters
     obs_dim = env.observation_space.shape[0]
@@ -23,9 +40,12 @@ def create_ppo(env, seed, include_params_in_obs=True):
     state_dim = 4
     param_dim = 12
     
+    # Get the appropriate feature extractor class
+    features_extractor_class = get_feature_extractor_class(feature_extractor_name)
+    
     # Define policy kwargs with custom feature extractor
     policy_kwargs = {
-        "features_extractor_class": F1TenthFeaturesExtractor,
+        "features_extractor_class": features_extractor_class,
         "features_extractor_kwargs": {
             "features_dim": 256,
             "state_dim": state_dim,
@@ -65,7 +85,7 @@ def create_ppo(env, seed, include_params_in_obs=True):
     )
     return model
 
-def create_ddpg(env, seed, include_params_in_obs=True):
+def create_ddpg(env, seed, include_params_in_obs=True, feature_extractor_name="FILM"):
     """Create a DDPG model with custom neural network architecture"""
     # Determine if the environment observation includes parameters
     obs_dim = env.observation_space.shape[0]
@@ -73,9 +93,12 @@ def create_ddpg(env, seed, include_params_in_obs=True):
     state_dim = 4
     param_dim = 12
     
+    # Get the appropriate feature extractor class
+    features_extractor_class = get_feature_extractor_class(feature_extractor_name)
+    
     # Define policy kwargs with custom feature extractor
     policy_kwargs = {
-        "features_extractor_class": F1TenthFeaturesExtractor,
+        "features_extractor_class": features_extractor_class,
         "features_extractor_kwargs": {
             "features_dim": 256,
             "state_dim": state_dim,
@@ -101,7 +124,7 @@ def create_ddpg(env, seed, include_params_in_obs=True):
     )
     return model
 
-def create_td3(env, seed, include_params_in_obs=True):
+def create_td3(env, seed, include_params_in_obs=True, feature_extractor_name="FILM"):
     """Create a TD3 model with custom neural network architecture"""
     # Determine if the environment observation includes parameters
     obs_dim = env.observation_space.shape[0]
@@ -109,9 +132,12 @@ def create_td3(env, seed, include_params_in_obs=True):
     state_dim = 4
     param_dim = 12
     
+    # Get the appropriate feature extractor class
+    features_extractor_class = get_feature_extractor_class(feature_extractor_name)
+    
     # Define policy kwargs with custom feature extractor
     policy_kwargs = {
-        "features_extractor_class": F1TenthFeaturesExtractor,
+        "features_extractor_class": features_extractor_class,
         "features_extractor_kwargs": {
             "features_dim": 256,
             "state_dim": state_dim,
@@ -137,10 +163,13 @@ def create_td3(env, seed, include_params_in_obs=True):
     )
     return model
 
-def create_sac(env, seed, include_params_in_obs=True):
+def create_sac(env, seed, include_params_in_obs=True, feature_extractor_name="FILM"):
     """Create a SAC model with custom neural network architecture"""
+    # Get the appropriate feature extractor class
+    features_extractor_class = get_feature_extractor_class(feature_extractor_name)
+    
     policy_kwargs = {
-        "features_extractor_class": F1TenthFeaturesExtractor,
+        "features_extractor_class": features_extractor_class,
         "features_extractor_kwargs": {
             "features_dim": 1024,
             "state_dim": 4,
@@ -601,7 +630,7 @@ def collect_expert_rollouts(model, env, raw_vec_env, expert_policies, total_tran
                                 pbar.update(new_transitions)
                                 if int(pbar.n / pbar.total * 100) % 10 == 0:
                                     log_message = ", ".join(f"env{i}: {env_transitions_collected[i]}/{transitions_per_env}" for i in range(num_envs))
-                                    logging.info(f"Collection Progress: {log_message}")
+                                    logging.debug(f"Collection Progress: {log_message}")
                                 
                 
                 # Update observations for next step
@@ -840,7 +869,7 @@ def create_vec_env(env_kwargs, seed, num_envs=1, num_param_cmbs=None, use_domain
     return vec_env
 
 # Updated train function to handle VecEnv and Domain Randomization
-def train(env, seed, num_envs=1, num_param_cmbs=None, use_domain_randomization=False, use_imitation_learning=True, imitation_policy_type="PURE_PURSUIT", algorithm="SAC", include_params_in_obs=True, racing_mode=False, normalize_obs=True, normalize_reward=True):
+def train(env, seed, num_envs=1, num_param_cmbs=None, use_domain_randomization=False, use_imitation_learning=True, imitation_policy_type="PURE_PURSUIT", algorithm="SAC", include_params_in_obs=True, racing_mode=False, normalize_obs=True, normalize_reward=True, feature_extractor_name="FILM"):
     """
     Trains the RL model.
 
@@ -858,16 +887,18 @@ def train(env, seed, num_envs=1, num_param_cmbs=None, use_domain_randomization=F
         racing_mode (bool): Whether to train in racing mode with two cars.
         normalize_obs (bool): Whether to normalize observations.
         normalize_reward (bool): Whether to normalize rewards.
+        feature_extractor_name (str): Name of feature extractor architecture to use.
     """
     # --- Create Model ---
+    logging.info(f"Creating {algorithm} model with {feature_extractor_name} feature extractor")
     if algorithm == "PPO":
-        model = create_ppo(env, seed, include_params_in_obs)
+        model = create_ppo(env, seed, include_params_in_obs, feature_extractor_name)
     elif algorithm == "DDPG":
-        model = create_ddpg(env, seed, include_params_in_obs)
+        model = create_ddpg(env, seed, include_params_in_obs, feature_extractor_name)
     elif algorithm == "TD3":
-        model = create_td3(env, seed, include_params_in_obs)
+        model = create_td3(env, seed, include_params_in_obs, feature_extractor_name)
     elif algorithm == "SAC":
-        model = create_sac(env, seed, include_params_in_obs)
+        model = create_sac(env, seed, include_params_in_obs, feature_extractor_name)
     else:
         raise ValueError(f"Unsupported algorithm: {algorithm}")
 
@@ -883,7 +914,7 @@ def train(env, seed, num_envs=1, num_param_cmbs=None, use_domain_randomization=F
     # --- RL Training ---
     # Create formatted path based on training parameters and timestamp
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    model_dir_name = f"{algorithm}_envs{num_envs}_params{num_param_cmbs if num_param_cmbs is not None else num_envs}_dr{int(use_domain_randomization)}_il{int(use_imitation_learning)}_crl{int(include_params_in_obs)}_racing{int(racing_mode)}"
+    model_dir_name = f"{algorithm}_{feature_extractor_name}_envs{num_envs}_params{num_param_cmbs if num_param_cmbs is not None else num_envs}_dr{int(use_domain_randomization)}_il{int(use_imitation_learning)}_crl{int(include_params_in_obs)}_racing{int(racing_mode)}"
     if use_imitation_learning:
         model_dir_name += f"_{imitation_policy_type}"
     model_dir_name += f"_seed{seed}_{timestamp}"
@@ -948,7 +979,7 @@ def train(env, seed, num_envs=1, num_param_cmbs=None, use_domain_randomization=F
     )
 
     model.learn(
-        total_timesteps=100_000_000,
+        total_timesteps=10_000_000,
         log_interval=10, # Log less frequently for VecEnv
         reset_num_timesteps=True, # Start timesteps from 0
         callback=save_callback

@@ -262,13 +262,415 @@ class F1TenthFeaturesExtractor(BaseFeaturesExtractor):
         return output
 
 
-class Reshape(nn.Module):
+class MoEFeaturesExtractor(BaseFeaturesExtractor):
     """
-    Helper module to reshape tensors.
-    """
-    def __init__(self, shape):
-        super().__init__()
-        self.shape = shape
+    Mixture of Experts (MoE) feature extractor for the F1Tenth environment.
 
-    def forward(self, x):
-        return x.reshape(self.shape)
+    This network processes state and lidar features, and uses a gating network
+    (conditioned on environment parameters if available) to weigh multiple expert networks.
+    """
+    @staticmethod
+    def _init_weights(m):
+        if isinstance(m, nn.Linear):
+            nn.init.orthogonal_(m.weight, nn.init.calculate_gain('relu'))
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+
+    def __init__(
+        self,
+        observation_space: spaces.Box,
+        features_dim: int = 1024, # Default features_dim
+        state_dim: int = 4,
+        lidar_dim: int = 1080,
+        param_dim: int = 12,
+        include_params: bool = True,
+        num_experts: int = 24,
+        state_proc_dim: int = 64,
+        lidar_proc_dim: int = 256,
+        expert_hidden_dim: int = 1024,
+        gate_hidden_dim: int = 64
+    ):
+        super().__init__(observation_space, features_dim)
+
+        self.state_dim = state_dim
+        self.lidar_dim = lidar_dim
+        self.param_dim = param_dim
+        self.include_params = include_params
+        self.num_experts = num_experts
+
+        # Verify observation space shape
+        expected_dim = state_dim + lidar_dim
+        if include_params:
+            expected_dim += param_dim
+        assert observation_space.shape[0] == expected_dim, \
+            f"Expected observation dimension {expected_dim}, got {observation_space.shape[0]}"
+
+        # Initial processing for state features
+        self.state_initial = nn.Sequential(
+            nn.Linear(state_dim, state_proc_dim),
+            nn.LayerNorm(state_proc_dim),
+            nn.ReLU(),
+        )
+
+        # Initial processing for LiDAR scan
+        self.lidar_initial = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(lidar_dim, lidar_proc_dim),
+            nn.LayerNorm(lidar_proc_dim),
+            nn.ReLU(),
+        )
+
+        expert_input_dim = state_proc_dim + lidar_proc_dim
+        self.experts = nn.ModuleList()
+        for _ in range(num_experts):
+            expert_net = nn.Sequential(
+                nn.Linear(expert_input_dim, expert_hidden_dim),
+                nn.LayerNorm(expert_hidden_dim),
+                nn.ReLU(),
+                nn.Linear(expert_hidden_dim, expert_hidden_dim),
+                nn.LayerNorm(expert_hidden_dim),
+                nn.ReLU(),
+                nn.Linear(expert_hidden_dim, features_dim) # Each expert outputs features_dim
+            )
+            self.experts.append(expert_net)
+
+        if self.include_params:
+            self.gating_network = nn.Sequential(
+                nn.Linear(param_dim, gate_hidden_dim),
+                nn.LayerNorm(gate_hidden_dim),
+                nn.ReLU(),
+                nn.Linear(gate_hidden_dim, gate_hidden_dim),
+                nn.LayerNorm(gate_hidden_dim),
+                nn.ReLU(),
+                nn.Linear(gate_hidden_dim, num_experts) # Raw scores for softmax
+            )
+        
+        # Initialize weights
+        self.apply(self._init_weights)
+        if self.include_params:
+            self.gating_network.apply(self._init_weights) # Gating network also needs init
+        
+        logging.info(f"MoE Feature extractor initialized with {num_experts} experts.")
+
+    def forward(self, observations: torch.Tensor) -> torch.Tensor:
+        # Extract different components from observation
+        state_features = observations[:, :self.state_dim]
+        lidar_features = observations[:, self.state_dim:self.state_dim + self.lidar_dim]
+
+        # Initial processing
+        state_output = self.state_initial(state_features)
+        lidar_output = self.lidar_initial(lidar_features)
+        
+        expert_input = torch.cat([state_output, lidar_output], dim=1)
+
+        expert_outputs = []
+        for expert in self.experts:
+            expert_outputs.append(expert(expert_input))
+        
+        # Stack expert outputs: (batch_size, num_experts, features_dim)
+        expert_outputs_stacked = torch.stack(expert_outputs, dim=1)
+
+        if self.include_params:
+            param_features = observations[:, self.state_dim + self.lidar_dim:]
+            gating_scores = self.gating_network(param_features)
+            gating_weights = torch.softmax(gating_scores, dim=-1) # (batch_size, num_experts)
+        else:
+            # Uniform weights if no params for gating
+            gating_weights = torch.ones(observations.shape[0], self.num_experts, device=observations.device) / self.num_experts
+            
+        # Expand gating_weights for broadcasting: (batch_size, num_experts, 1)
+        gating_weights_expanded = gating_weights.unsqueeze(-1)
+        
+        # Weighted sum of expert outputs
+        # (batch_size, num_experts, 1) * (batch_size, num_experts, features_dim) -> sum over dim 1
+        output = torch.sum(gating_weights_expanded * expert_outputs_stacked, dim=1)
+        
+        return output
+
+
+class MLPFeaturesExtractor(BaseFeaturesExtractor):
+    """
+    Simple MLP feature extractor for the F1Tenth environment.
+    
+    A straightforward multi-layer perceptron with no specialized processing
+    for different input components.
+    """
+    @staticmethod
+    def _init_weights(m):
+        if isinstance(m, nn.Linear):
+            nn.init.orthogonal_(m.weight, nn.init.calculate_gain('relu'))
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+
+    def __init__(
+        self,
+        observation_space: spaces.Box,
+        features_dim: int = 1024,
+        state_dim: int = 4,
+        lidar_dim: int = 1080,
+        param_dim: int = 12, 
+        include_params: bool = True
+    ):
+        self.state_dim = state_dim
+        self.lidar_dim = lidar_dim
+        self.param_dim = param_dim
+        self.include_params = include_params
+        
+        # Determine the input dimension based on whether params are included
+        input_dim = state_dim + lidar_dim
+        if include_params:
+            input_dim += param_dim
+            
+        # Verify observation space
+        assert observation_space.shape[0] == input_dim, f"Expected observation dimension {input_dim}, got {observation_space.shape[0]}"
+            
+        super().__init__(observation_space, features_dim)
+        
+        # Simple MLP with gradually decreasing layer sizes
+        self.network = nn.Sequential(
+            nn.Linear(input_dim, 1024),
+            nn.LayerNorm(1024),
+            nn.ReLU(),
+            nn.Linear(1024, 1024),
+            nn.LayerNorm(1024),
+            nn.ReLU(),
+            nn.Linear(1024, 1024),
+            nn.LayerNorm(1024),
+            nn.ReLU(),
+            nn.Linear(1024, features_dim),
+            nn.LayerNorm(features_dim),
+            nn.ReLU()
+        )
+        
+        # Initialize weights
+        self.network.apply(self._init_weights)
+        logging.info("MLP Feature extractor initialized")
+
+    def forward(self, observations: torch.Tensor) -> torch.Tensor:
+        # The entire observation is processed at once without splitting
+        return self.network(observations)
+
+
+class ResNetFeaturesExtractor(BaseFeaturesExtractor):
+    """
+    ResNet-style feature extractor for the F1Tenth environment.
+    
+    Uses residual connections throughout the network but processes
+    the entire observation as a single vector.
+    """
+    @staticmethod
+    def _init_weights(m):
+        if isinstance(m, nn.Linear):
+            nn.init.orthogonal_(m.weight, nn.init.calculate_gain('relu'))
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+
+    def __init__(
+        self,
+        observation_space: spaces.Box,
+        features_dim: int = 1024,
+        state_dim: int = 4,
+        lidar_dim: int = 1080,
+        param_dim: int = 12, 
+        include_params: bool = True
+    ):
+        self.state_dim = state_dim
+        self.lidar_dim = lidar_dim
+        self.param_dim = param_dim
+        self.include_params = include_params
+        
+        # Determine the input dimension based on whether params are included
+        input_dim = state_dim + lidar_dim
+        if include_params:
+            input_dim += param_dim
+            
+        # Verify observation space
+        assert observation_space.shape[0] == input_dim, f"Expected observation dimension {input_dim}, got {observation_space.shape[0]}"
+            
+        super().__init__(observation_space, features_dim)
+        
+        # Initial processing
+        self.initial = nn.Sequential(
+            nn.Linear(input_dim, 1024),
+            nn.LayerNorm(1024),
+            nn.ReLU()
+        )
+        
+        # Residual blocks
+        self.residual_blocks = nn.Sequential(
+            ResidualBlock(1024, 1024, 1024),
+            ResidualBlock(1024, 1024, 1024),
+            ResidualBlock(1024, 1024, 1024),
+            ResidualBlock(1024, 1024, 1024),
+        )
+        
+        # Final layer to match features_dim
+        self.final = nn.Sequential(
+            nn.Linear(1024, features_dim),
+            nn.LayerNorm(features_dim),
+            nn.ReLU()
+        )
+        
+        # Initialize weights
+        self.initial.apply(self._init_weights)
+        self.residual_blocks.apply(self._init_weights)
+        self.final.apply(self._init_weights)
+        logging.info("ResNet Feature extractor initialized")
+
+    def forward(self, observations: torch.Tensor) -> torch.Tensor:
+        # Process the entire observation through the network
+        x = self.initial(observations)
+        x = self.residual_blocks(x)
+        return self.final(x)
+
+
+class TransformerFeaturesExtractor(BaseFeaturesExtractor):
+    """
+    Transformer-based feature extractor for the F1Tenth environment.
+    
+    Uses self-attention to process the input features.
+    """
+    @staticmethod
+    def _init_weights(m):
+        if isinstance(m, nn.Linear):
+            nn.init.orthogonal_(m.weight, nn.init.calculate_gain('relu'))
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+
+    def __init__(
+        self,
+        observation_space: spaces.Box,
+        features_dim: int = 1024,
+        state_dim: int = 4,
+        lidar_dim: int = 1080,
+        param_dim: int = 12, 
+        include_params: bool = True,
+        num_heads: int = 4,
+        num_layers: int = 3,
+        dim_feedforward: int = 1024,
+        embedding_dim: int = 128
+    ):
+        self.state_dim = state_dim
+        self.lidar_dim = lidar_dim
+        self.param_dim = param_dim
+        self.include_params = include_params
+        self.embedding_dim = embedding_dim
+        
+        # Determine the input dimension and sequence length
+        self.total_dim = state_dim + lidar_dim
+        if include_params:
+            self.total_dim += param_dim
+            
+        # Verify observation space
+        assert observation_space.shape[0] == self.total_dim, f"Expected observation dimension {self.total_dim}, got {observation_space.shape[0]}"
+            
+        super().__init__(observation_space, features_dim)
+        
+        # Determine how to split the input into tokens
+        # We'll use different strategies for different parts of the input
+        
+        # For lidar, segment into multiple tokens to better capture spatial patterns
+        # Break the 1080 lidar points into e.g. 9 tokens of 120 points each
+        self.lidar_tokens = 9
+        self.lidar_points_per_token = lidar_dim // self.lidar_tokens
+        
+        # For state and params, use one token each
+        self.num_tokens = self.lidar_tokens + 1  # lidar tokens + state token
+        if include_params:
+            self.num_tokens += 1  # Add one more token for params
+        
+        # Initial embeddings for each part
+        self.state_embedding = nn.Sequential(
+            nn.Linear(state_dim, embedding_dim),
+            nn.LayerNorm(embedding_dim)
+        )
+        
+        self.lidar_embedding = nn.Sequential(
+            nn.Linear(self.lidar_points_per_token, embedding_dim),
+            nn.LayerNorm(embedding_dim)
+        )
+        
+        if include_params:
+            self.param_embedding = nn.Sequential(
+                nn.Linear(param_dim, embedding_dim),
+                nn.LayerNorm(embedding_dim)
+            )
+        
+        # Positional encoding - learnable
+        self.pos_embedding = nn.Parameter(torch.zeros(1, self.num_tokens, embedding_dim))
+        
+        # Transformer encoder
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=embedding_dim,
+            nhead=num_heads,
+            dim_feedforward=dim_feedforward,
+            batch_first=True
+        )
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        
+        # Final processing to get to features_dim
+        self.final = nn.Sequential(
+            nn.Linear(embedding_dim * self.num_tokens, 1024),
+            nn.LayerNorm(1024),
+            nn.ReLU(),
+            nn.Linear(1024, features_dim),
+            nn.LayerNorm(features_dim),
+            nn.ReLU()
+        )
+        
+        # Initialize weights
+        self.state_embedding.apply(self._init_weights)
+        self.lidar_embedding.apply(self._init_weights)
+        if include_params:
+            self.param_embedding.apply(self._init_weights)
+        self.final.apply(self._init_weights)
+        
+        # Initialize positional embedding
+        nn.init.normal_(self.pos_embedding, mean=0, std=0.02)
+        
+        logging.info("Transformer Feature extractor initialized")
+
+    def forward(self, observations: torch.Tensor) -> torch.Tensor:
+        batch_size = observations.shape[0]
+        
+        # Extract different components
+        state = observations[:, :self.state_dim]
+        lidar = observations[:, self.state_dim:self.state_dim + self.lidar_dim]
+        
+        if self.include_params:
+            params = observations[:, self.state_dim + self.lidar_dim:]
+        
+        # Get state embedding (one token)
+        state_emb = self.state_embedding(state)  # shape: [batch_size, embedding_dim]
+        state_emb = state_emb.unsqueeze(1)  # shape: [batch_size, 1, embedding_dim]
+        
+        # Process lidar in chunks to create multiple tokens
+        lidar_tokens = []
+        for i in range(self.lidar_tokens):
+            start_idx = i * self.lidar_points_per_token
+            end_idx = start_idx + self.lidar_points_per_token
+            lidar_chunk = lidar[:, start_idx:end_idx]
+            lidar_emb = self.lidar_embedding(lidar_chunk)  # shape: [batch_size, embedding_dim]
+            lidar_tokens.append(lidar_emb.unsqueeze(1))  # shape: [batch_size, 1, embedding_dim]
+        
+        # Concatenate state and lidar tokens
+        sequence = [state_emb] + lidar_tokens  # start with state token
+        
+        # Add parameter token if included
+        if self.include_params:
+            param_emb = self.param_embedding(params)  # shape: [batch_size, embedding_dim]
+            param_emb = param_emb.unsqueeze(1)  # shape: [batch_size, 1, embedding_dim]
+            sequence.append(param_emb)
+            
+        # Combine into sequence
+        x = torch.cat(sequence, dim=1)  # shape: [batch_size, num_tokens, embedding_dim]
+        
+        # Add positional embeddings
+        x = x + self.pos_embedding
+        
+        # Pass through transformer
+        x = self.transformer_encoder(x)
+        
+        # Flatten and pass through final layers
+        x = x.reshape(batch_size, -1)  # shape: [batch_size, num_tokens*embedding_dim]
+        return self.final(x)
