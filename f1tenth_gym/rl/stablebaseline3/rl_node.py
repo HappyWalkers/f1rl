@@ -6,20 +6,51 @@ from sensor_msgs.msg import LaserScan
 from ackermann_msgs.msg import AckermannDriveStamped
 from nav_msgs.msg import Odometry
 from stable_baselines3 import SAC
+from sb3_contrib import RecurrentPPO
+from stable_baselines3.common.vec_env import VecNormalize
 import os
 import time
 from gymnasium import spaces
 import sys
+import argparse
+import gymnasium
 # Add the parent directory to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
 from utils.Track import Track
 from utils import utils # Added import
 
+class DummyEnv(gymnasium.Env):
+    """
+    Dummy Gymnasium environment for loading VecNormalize statistics
+    """
+    def __init__(self, observation_space, action_space):
+        super().__init__()
+        self.observation_space = observation_space
+        self.action_space = action_space
+        self.np_random = None
+        
+    def reset(self, seed=None, options=None):
+        # Implementation of proper seeding
+        super().reset(seed=seed)
+        # Simple zeroed observation
+        return np.zeros(self.observation_space.shape, dtype=np.float32), {}
+        
+    def step(self, action):
+        # Return observation, reward, terminated, truncated, info
+        return np.zeros(self.observation_space.shape, dtype=np.float32), 0.0, False, False, {}
+        
+    def render(self):
+        pass
+        
+    def close(self):
+        pass
+
 class RLF1TenthController(Node):
     """
     ROS Node that uses a trained RL model to control an F1Tenth car
     """
-    def __init__(self):
+    def __init__(self, algorithm="SAC", model_path="./logs/best_model/best_model.zip", 
+                 vecnorm_path=None, map_index=63, map_dir_="./f1tenth_racetracks/"):
         super().__init__('rl_f1tenth_controller')
         
         # Topics
@@ -28,12 +59,31 @@ class RLF1TenthController(Node):
         # odom_topic = '/pf/pose/odom'
         drive_topic = '/drive'
         
+        # Store configuration as attributes
+        self.algorithm = algorithm
+        model_path = os.path.expanduser(model_path)
+        
         # Add last steering angle tracking
         self.last_steering_angle = 0.0
         
+        # For recurrent policies (LSTM state tracking)
+        self.is_recurrent = self.algorithm == "RECURRENT_PPO"
+        self.lstm_states = None
+        self.episode_starts = np.ones((1,), dtype=bool)  # Mark the start of the episode
+        
+        # Try to infer vecnorm_path if not provided
+        if vecnorm_path is None and model_path is not None:
+            model_dir = os.path.dirname(model_path)
+            potential_vecnorm_path = os.path.join(model_dir, "vec_normalize.pkl")
+            if os.path.exists(potential_vecnorm_path):
+                vecnorm_path = potential_vecnorm_path
+                self.get_logger().info(f"Found VecNormalize statistics at {vecnorm_path}")
+        
+        self.vecnorm_path = vecnorm_path
+        self.vec_normalize = None
+        
         # Load the trained model
-        model_path = os.path.expanduser("./logs/best_model/best_model.zip")
-        self.get_logger().info(f"Loading model from {model_path}")
+        self.get_logger().info(f"Loading {self.algorithm} model from {model_path}")
         try:
             # Create observation and action spaces matching training environment
             # Updated shape to 1084: [s, ey, vel, yaw_angle] + 1080 lidar
@@ -55,9 +105,44 @@ class RLF1TenthController(Node):
                 "observation_space": observation_space
             }
             
-            # Load model with spaces and custom objects
-            self.model = SAC.load(model_path, custom_objects=custom_objects)
-            self.get_logger().info("Model loaded successfully")
+            # Load model based on algorithm type
+            if self.algorithm == "RECURRENT_PPO":
+                self.model = RecurrentPPO.load(model_path, custom_objects=custom_objects)
+                self.get_logger().info("RecurrentPPO model loaded successfully")
+            else:
+                self.model = SAC.load(model_path, custom_objects=custom_objects)
+                self.get_logger().info("SAC model loaded successfully")
+                
+            # Double-check if model is recurrent based on its attributes
+            if not self.is_recurrent and hasattr(self.model, 'policy') and hasattr(self.model.policy, '_initial_state'):
+                self.get_logger().info("Detected recurrent policy, enabling LSTM state tracking")
+                self.is_recurrent = True
+                
+            # Load VecNormalize statistics if available
+            if self.vecnorm_path and os.path.exists(self.vecnorm_path):
+                self.get_logger().info(f"Loading VecNormalize statistics from {self.vecnorm_path}")
+                # Create a dummy environment with matching observation space
+                from stable_baselines3.common.vec_env import DummyVecEnv
+                from stable_baselines3.common.monitor import Monitor
+                
+                # Create a function to initialize the environment
+                def make_dummy_env():
+                    env = DummyEnv(observation_space, action_space)
+                    env = Monitor(env)  # Monitor wrapper is required by SB3
+                    return env
+                
+                # Create a vectorized environment
+                dummy_vec_env = DummyVecEnv([make_dummy_env])
+                
+                # Load normalize statistics
+                self.vec_normalize = VecNormalize.load(self.vecnorm_path, dummy_vec_env)
+                # Disable training and reward normalization
+                self.vec_normalize.training = False
+                self.vec_normalize.norm_reward = False
+                self.get_logger().info("VecNormalize statistics loaded successfully")
+            else:
+                self.get_logger().warning("No VecNormalize statistics found, observations will not be normalized")
+                
         except Exception as e:
             self.get_logger().error(f"Failed to load model: {e}")
             raise
@@ -67,12 +152,9 @@ class RLF1TenthController(Node):
         self.odom_data = None
         self.state_ready = False
         self.s_guess = 0.0 # Initialize s_guess for Frenet conversion
+        self.current_step = 0 # Track steps for debugging
 
         # Load Track for Frenet Conversion
-        # TODO: Make map index and map directory configurable via ROS params or args
-        map_index = 63 # Using default map index from main.py
-        map_dir_ = './f1tenth_racetracks/' # Relative to workspace root where node is likely run from
-
         class Config(utils.ConfigYAML): # Simple config mimicking main.py
             map_dir = map_dir_
             map_scale = 1
@@ -129,7 +211,7 @@ class RLF1TenthController(Node):
         # Create a timer for control loop
         self.timer = self.create_timer(0.05, self.control_loop)
         
-        self.get_logger().info("RL F1Tenth Controller initialized")
+        self.get_logger().info(f"RL F1Tenth Controller initialized with {self.algorithm} algorithm")
 
     def lidar_callback(self, msg):
         """Process LiDAR scan data"""
@@ -213,6 +295,22 @@ class RLF1TenthController(Node):
 
         observation = np.concatenate((state, lidar_scan_processed))
 
+        # Normalize observation if VecNormalize is available
+        original_obs = observation.copy()  # Keep a copy for debugging
+        
+        try:
+            if self.vec_normalize is not None:
+                # VecNormalize expects batch dimension
+                observation = observation.reshape(1, -1)
+                observation = self.vec_normalize.normalize_obs(observation)
+                observation = observation.reshape(-1)
+                # Log normalization impact occasionally (every 20 steps)
+                if self.current_step % 20 == 0:
+                    self.get_logger().debug(f"Observation normalized: original s={original_obs[0]:.4f}, normalized s={observation[0]:.4f}")
+        except Exception as e:
+            self.get_logger().error(f"Error during observation normalization: {e}")
+            observation = original_obs  # Fallback to unnormalized observation
+            
         # Final check for shape
         if observation.shape != (1084,):
             self.get_logger().error(f"Observation shape mismatch: expected (1084,), got {observation.shape}")
@@ -225,6 +323,9 @@ class RLF1TenthController(Node):
         if not self.state_ready:
             self.get_logger().info("Waiting for sensor data...")
             return
+            
+        # Increment step counter
+        self.current_step += 1
         
         # Prepare observation
         obs = self.prepare_observation()
@@ -235,7 +336,22 @@ class RLF1TenthController(Node):
         
         # Get action from model
         start_time = time.time()
-        action, _ = self.model.predict(obs, deterministic=True)
+        
+        # Handle differently based on whether the model is recurrent
+        if self.is_recurrent:
+            # For recurrent policies, we need to pass lstm_states and episode_starts
+            action, self.lstm_states = self.model.predict(
+                obs, 
+                state=self.lstm_states, 
+                episode_start=self.episode_starts, 
+                deterministic=True
+            )
+            # Update episode_starts for next step
+            self.episode_starts = np.zeros((1,), dtype=bool)  # After first step, no longer episode start
+        else:
+            # Standard prediction for non-recurrent models
+            action, _ = self.model.predict(obs, deterministic=True)
+        
         inference_time = time.time() - start_time
         
         # Convert action to drive command
@@ -263,11 +379,42 @@ class RLF1TenthController(Node):
             f"Action: steering={steering:.4f}, speed={speed:.4f}, " +
             f"Inference time: {inference_time*1000:.2f}ms"
         )
+    
+    def reset_lstm_state(self):
+        """Reset LSTM states when needed (e.g., at the beginning of a new episode)"""
+        if self.is_recurrent:
+            self.lstm_states = None
+            self.episode_starts = np.ones((1,), dtype=bool)
+            self.get_logger().info("Reset LSTM states")
 
 def main(args=None):
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='F1TENTH RL Controller')
+    parser.add_argument('--algorithm', type=str, default='RECURRENT_PPO', choices=['SAC', 'RECURRENT_PPO'],
+                        help='RL algorithm to use (SAC or RECURRENT_PPO)')
+    parser.add_argument('--model_path', type=str, default='./logs/best_model/best_model.zip',
+                        help='Path to the trained model')
+    parser.add_argument('--vecnorm_path', type=str, default=None,
+                        help='Path to VecNormalize statistics')
+    parser.add_argument('--map_index', type=int, default=63,
+                        help='Index of the map to use')
+    parser.add_argument('--map_dir', type=str, default='./f1tenth_racetracks/',
+                        help='Directory containing the track maps')
+    
+    # Parse known args to avoid conflicts with ROS args
+    parsed_args, unknown = parser.parse_known_args(args=args)
+    
     rclpy.init(args=args)
     print("RL F1Tenth Controller Initialized")
-    controller = RLF1TenthController()
+    
+    # Create the controller with parsed arguments
+    controller = RLF1TenthController(
+        algorithm=parsed_args.algorithm,
+        model_path=parsed_args.model_path,
+        vecnorm_path=parsed_args.vecnorm_path,
+        map_index=parsed_args.map_index,
+        map_dir_=parsed_args.map_dir
+    )
     
     try:
         rclpy.spin(controller)
