@@ -1,4 +1,5 @@
 from stable_baselines3 import PPO, DDPG, DQN, TD3, SAC
+from sb3_contrib import RecurrentPPO
 from absl import logging
 from stable_baselines3.common.callbacks import EvalCallback
 from stable_baselines3.common.env_util import make_vec_env
@@ -75,6 +76,59 @@ def create_ppo(env, seed, include_params_in_obs=True, feature_extractor_name="FI
         max_grad_norm=0.5,
         use_sde=False,
         sde_sample_freq=-1,
+        target_kl=None,
+        tensorboard_log="./ppo_tensorboard/",
+        policy_kwargs=policy_kwargs,
+        verbose=1,
+        seed=seed,
+        device="auto",
+        _init_setup_model=True,
+    )
+    return model
+
+def create_recurrent_ppo(env, seed, include_params_in_obs=False, feature_extractor_name="FILM"):
+    """Create a RecurrentPPO model with LSTM policy architecture"""
+    # Determine if the environment observation includes parameters
+    obs_dim = env.observation_space.shape[0]
+    lidar_dim = 1080
+    state_dim = 4
+    param_dim = 12
+    
+    # Get the appropriate feature extractor class
+    features_extractor_class = get_feature_extractor_class(feature_extractor_name)
+    
+    # Define policy kwargs with custom feature extractor
+    policy_kwargs = {
+        "features_extractor_class": features_extractor_class,
+        "features_extractor_kwargs": {
+            "features_dim": 256,
+            "state_dim": state_dim,
+            "lidar_dim": lidar_dim,
+            "param_dim": param_dim,
+            "include_params": include_params_in_obs
+        },
+        # LSTM settings
+        "lstm_hidden_size": 256,
+        "n_lstm_layers": 1,
+        "shared_lstm": False,
+        "enable_critic_lstm": True
+    }
+    
+    model = RecurrentPPO(
+        policy="MlpLstmPolicy",
+        env=env,
+        learning_rate=3e-4,
+        n_steps=2048,          # how many steps to collect before an update
+        batch_size=512,
+        n_epochs=10,           # how many gradient steps per update
+        gamma=0.99,            # discount factor
+        gae_lambda=0.95,       # advantage discount
+        clip_range=0.2,
+        clip_range_vf=None,
+        normalize_advantage=True,
+        ent_coef=0.01,
+        vf_coef=1,
+        max_grad_norm=0.5,
         target_kl=None,
         tensorboard_log="./ppo_tensorboard/",
         policy_kwargs=policy_kwargs,
@@ -291,6 +345,8 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
         # Load the appropriate model based on algorithm type
         if algorithm == "PPO":
             model = PPO.load(model_path)
+        elif algorithm == "RECURRENT_PPO":
+            model = RecurrentPPO.load(model_path)
         elif algorithm == "DDPG":
             model = DDPG.load(model_path)
         elif algorithm == "TD3":
@@ -309,6 +365,9 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
     env_episode_lengths = [[] for _ in range(num_envs)]
     env_lap_times = [[] for _ in range(num_envs)]
     
+    # For RecurrentPPO, we need to track LSTM states
+    is_recurrent = algorithm == "RECURRENT_PPO" or (hasattr(model, 'policy') and hasattr(model.policy, '_initial_state'))
+    
     # Run evaluation episodes for each environment
     for env_idx in range(num_envs):
         logging.info(f"Evaluating on environment {env_idx+1}/{num_envs}")
@@ -326,9 +385,9 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
             else:
                 obs = eval_env.reset()
             
-            # Reset the policy if needed
-            if hasattr(model, 'reset'):
-                model.reset()
+            # For recurrent policies, initialize the LSTM states
+            lstm_states = None
+            episode_starts = np.ones((1,), dtype=bool)  # Mark the start of the episode
             
             terminated = False
             truncated = False
@@ -346,7 +405,17 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
                 # Get action from model
                 # Extract the observation for a single environment from the batch
                 single_obs = obs[0] if isinstance(obs, np.ndarray) and obs.ndim > 1 else obs
-                action, _states = model.predict(single_obs, deterministic=True)
+                
+                # For recurrent policies, we need to pass lstm_states and episode_starts
+                if is_recurrent:
+                    action, lstm_states = model.predict(
+                        single_obs, 
+                        state=lstm_states, 
+                        episode_start=episode_starts, 
+                        deterministic=True
+                    )
+                else:
+                    action, _states = model.predict(single_obs, deterministic=True)
                 
                 # Take step in environment
                 if is_vec_env:
@@ -364,6 +433,10 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
                 else:
                     # Gymnasium envs return 5 values
                     obs, reward, terminated, truncated, info = eval_env.step(action)
+                
+                # Update episode_starts for recurrent policies
+                if is_recurrent:
+                    episode_starts = np.zeros((1,), dtype=bool)  # After first step, no longer episode start
                 
                 total_reward += reward
                 step_count += 1
@@ -882,7 +955,7 @@ def train(env, seed, num_envs=1, num_param_cmbs=None, use_domain_randomization=F
         use_domain_randomization (bool): Whether to randomize environment parameters.
         use_imitation_learning (bool): Whether to use imitation learning before RL training.
         imitation_policy_type (str): Policy for imitation learning.
-        algorithm (str): RL algorithm to use (e.g., SAC, PPO).
+        algorithm (str): RL algorithm to use (e.g., SAC, PPO, RECURRENT_PPO).
         include_params_in_obs (bool): Whether to include environment parameters in observations.
         racing_mode (bool): Whether to train in racing mode with two cars.
         normalize_obs (bool): Whether to normalize observations.
@@ -893,6 +966,8 @@ def train(env, seed, num_envs=1, num_param_cmbs=None, use_domain_randomization=F
     logging.info(f"Creating {algorithm} model with {feature_extractor_name} feature extractor")
     if algorithm == "PPO":
         model = create_ppo(env, seed, include_params_in_obs, feature_extractor_name)
+    elif algorithm == "RECURRENT_PPO":
+        model = create_recurrent_ppo(env, seed, include_params_in_obs, feature_extractor_name)
     elif algorithm == "DDPG":
         model = create_ddpg(env, seed, include_params_in_obs, feature_extractor_name)
     elif algorithm == "TD3":
