@@ -202,22 +202,34 @@ class F110GymWrapper(gymnasium.Env):
         lidar_scan = obs['scans'][agent_idx]
 
         # Get the state components
-        s, ey = obs["state_frenet"][agent_idx][0:2]  # Frenet coordinates
-        vel, yaw_angle = obs['state'][agent_idx][3:5]  # Velocity and yaw angle
+        s_raw, ey_raw = obs["state_frenet"][agent_idx][0:2]  # Frenet coordinates
+        vel_raw = obs['state'][agent_idx][3] 
+        yaw_angle_raw = obs['state'][agent_idx][4]
+
+        # Clip raw state values to plausible physical limits before applying noise
+        # This helps to prevent np.inf or extreme values from the simulator state from corrupting downstream processing
+        s = np.clip(s_raw, -1000.0, 1000.0)  # Example: Large track arc length
+        ey = np.clip(ey_raw, -5.0, 5.0)      # Example: Max lateral error (e.g., track width)
+        
+        # Use v_min/v_max from base_env_params for velocity clipping
+        current_v_min = self.base_env_params.get('v_min', -5.0)
+        current_v_max = self.base_env_params.get('v_max', 12.0)
+        vel = np.clip(vel_raw, current_v_min - 5.0, current_v_max + 5.0) # Clip with some margin
+        
+        yaw_angle = np.clip(yaw_angle_raw, -np.pi - 0.5, np.pi + 0.5) # Clip with some margin before normalization
 
         # Apply noise to state components
         if self.s_noise_stddev > 0:
-            s += self.np_random.normal(0, self.s_noise_stddev) * s if s != 0 else self.np_random.normal(0, self.s_noise_stddev)
+            s += self.np_random.normal(0, self.s_noise_stddev)
         
         if self.ey_noise_stddev > 0:
-            ey += self.np_random.normal(0, self.ey_noise_stddev) * ey if ey != 0 else self.np_random.normal(0, self.ey_noise_stddev)
+            ey += self.np_random.normal(0, self.ey_noise_stddev)
         
         if self.vel_noise_stddev > 0:
-            vel += self.np_random.normal(0, self.vel_noise_stddev) * vel if vel != 0 else self.np_random.normal(0, self.vel_noise_stddev)
-            vel = max(vel, 0.0)  # Ensure velocity doesn't go negative
+            vel += self.np_random.normal(0, self.vel_noise_stddev)
         
         if self.yaw_noise_stddev > 0:
-            yaw_angle += self.np_random.normal(0, self.yaw_noise_stddev) * yaw_angle if yaw_angle != 0 else self.np_random.normal(0, self.yaw_noise_stddev)
+            yaw_angle += self.np_random.normal(0, self.yaw_noise_stddev)
             # Keep yaw angle in range [-pi, pi]
             yaw_angle = (yaw_angle + np.pi) % (2 * np.pi) - np.pi
 

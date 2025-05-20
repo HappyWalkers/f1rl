@@ -876,11 +876,11 @@ def create_vec_env(env_kwargs, seed, num_envs=1, num_param_cmbs=None, use_domain
                 'C_Sr': rng.uniform(4.0, 5.5),
                 'm': rng.uniform(3.0, 4.5),
                 'I': rng.uniform(0.03, 0.06),
-                'lidar_noise_stddev': rng.uniform(0.0, 0.01),
-                's_noise_stddev': rng.uniform(0.0, 0.01),
-                'ey_noise_stddev': rng.uniform(0.0, 0.01),
-                'vel_noise_stddev': rng.uniform(0.0, 0.01),
-                'yaw_noise_stddev': rng.uniform(0.0, 0.01)
+                'lidar_noise_stddev': rng.uniform(0.0, 0.1),
+                's_noise_stddev': rng.uniform(0.0, 1),
+                'ey_noise_stddev': rng.uniform(0.0, 0.5),
+                'vel_noise_stddev': rng.uniform(0.0, 0.5),
+                'yaw_noise_stddev': rng.uniform(0, 0.5)
             }
             sampled_push_0_prob = rng.uniform(0.0, 0.01)
             param_set['push_0_prob'] = sampled_push_0_prob
