@@ -14,6 +14,9 @@ from gymnasium import spaces
 import sys
 import argparse
 import gymnasium
+import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 # Add the parent directory to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
 from utils.Track import Track
@@ -70,6 +73,17 @@ class RLF1TenthController(Node):
         self.is_recurrent = self.algorithm == "RECURRENT_PPO"
         self.lstm_states = None
         self.episode_starts = np.ones((1,), dtype=bool)  # Mark the start of the episode
+        
+        # Initialize matplotlib figure for lidar visualization
+        self.fig = plt.figure(figsize=(12, 10))
+        
+        # Create two subplots
+        self.ax_polar = self.fig.add_subplot(211, projection='polar')
+        self.ax_range = self.fig.add_subplot(212)
+        
+        plt.ion()  # Enable interactive mode
+        self.lidar_plot = None
+        self.show_lidar_plot = True
         
         # Try to infer vecnorm_path if not provided
         if vecnorm_path is None and model_path is not None:
@@ -373,12 +387,63 @@ class RLF1TenthController(Node):
         # Publish the drive command
         self.drive_pub.publish(drive_msg)
         
+        # Plot lidar scan
+        self.plot_lidar_scan()
+        
         # Log info
         self.get_logger().info(
             f"State: s={obs[0]:.4f}, ey={obs[1]:.4f}, vel={obs[2]:.4f}, yaw={obs[3]:.4f}, " +
             f"Action: steering={steering:.4f}, speed={speed:.4f}, " +
             f"Inference time: {inference_time*1000:.2f}ms"
         )
+    
+    def plot_lidar_scan(self):
+        """Plot lidar scan in polar coordinates and as range values"""
+        if not self.show_lidar_plot or self.lidar_data is None:
+            return
+        
+        # Create angle array based on lidar data length
+        scan_length = len(self.lidar_data)
+        angles = np.linspace(0, 2*np.pi, scan_length)
+        indices = np.arange(scan_length)
+        
+        # Clear previous plots
+        self.ax_polar.clear()
+        self.ax_range.clear()
+        
+        # Set polar plot limits
+        self.ax_polar.set_rlim(0, 30)
+        
+        # Plot the lidar scan in polar coordinates
+        self.ax_polar.scatter(angles, self.lidar_data, s=2, c='blue')
+        
+        # Set title and show ego vehicle position in polar plot
+        self.ax_polar.set_title('LiDAR Scan - Polar View')
+        self.ax_polar.plot(0, 0, 'ro')  # Red dot at origin representing the vehicle
+        
+        # Add car shape representation (simple triangle)
+        car_angles = np.array([0, 2.5, -2.5]) * np.pi / 180  # Front and sides of car
+        car_radius = np.array([0.3, 0.2, 0.2])  # Front longer than sides
+        self.ax_polar.scatter(car_angles, car_radius, c='red', s=50)
+        
+        # Plot the lidar scan as range values
+        self.ax_range.scatter(indices, self.lidar_data, s=2, c='blue')
+        self.ax_range.set_xlim(0, len(indices))
+        self.ax_range.set_ylim(0, 30)
+        self.ax_range.set_xlabel('Scan Index (0-1080)')
+        self.ax_range.set_ylabel('Range (m)')
+        self.ax_range.set_title('LiDAR Scan - Range View')
+        self.ax_range.grid(True, linestyle='--', alpha=0.7)
+        
+        # Adjust layout
+        self.fig.tight_layout()
+        
+        # Draw and update plot
+        self.fig.canvas.draw_idle()
+        self.fig.canvas.flush_events()
+        
+        # Pause briefly to allow plot to update
+        plt.pause(0.001)
     
     def reset_lstm_state(self):
         """Reset LSTM states when needed (e.g., at the beginning of a new episode)"""
