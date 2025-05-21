@@ -882,9 +882,8 @@ def create_vec_env(env_kwargs, seed, num_envs=1, num_param_cmbs=None, use_domain
                 'vel_noise_stddev': rng.uniform(0.0, 0.5),
                 'yaw_noise_stddev': rng.uniform(0, 0.5)
             }
-            sampled_push_0_prob = rng.uniform(0.0, 0.01)
-            param_set['push_0_prob'] = sampled_push_0_prob
-            param_set['push_2_prob'] = sampled_push_0_prob
+            param_set['push_0_prob'] = rng.uniform(0.0, 0.1)
+            param_set['push_2_prob'] = rng.uniform(0.0, 0.05)
             
             logging.info(
                 f"Param Set {i} Parameters: mu: {param_set['mu']}, C_Sf: {param_set['C_Sf']}, C_Sr: {param_set['C_Sr']}, m: {param_set['m']}, I: {param_set['I']}; "

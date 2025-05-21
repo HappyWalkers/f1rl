@@ -386,14 +386,13 @@ class F110GymWrapper(gymnasium.Env):
             combined_actions[0] = action           # RL agent (now index 0)
             
             # --- Action Queuing Logic for RL agent only (now index 0) ---
+            # Push 0, 1, or 2 times with average 1
+            num_pushes = self.np_random.choice([0, 1, 2], p=[self.push_0_prob, self.push_1_prob, self.push_2_prob])
+            for _ in range(num_pushes):
+                self.action_buffer.append(action.copy())
+            
             if not self.action_buffer:  # If queue is empty
                 self.action_buffer.append(action.copy())
-                self.action_buffer.append(action.copy())
-            else:
-                # Push 0, 1, or 2 times with average 1
-                num_pushes = self.np_random.choice([0, 1, 2], p=[self.push_0_prob, self.push_1_prob, self.push_2_prob])
-                for _ in range(num_pushes):
-                    self.action_buffer.append(action.copy())
             
             # Get the action to execute for RL agent (now index 0)
             if self.action_buffer:
