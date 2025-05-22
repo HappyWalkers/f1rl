@@ -264,29 +264,41 @@ def create_sac(env, seed, include_params_in_obs=True, feature_extractor_name="FI
     )
     return model
 
-def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm="SAC", num_episodes=5, model=None, racing_mode=False, vecnorm_path=None):
-    """
-    Evaluates a trained model or wall-following policy on the environment.
-    
-    Args:
-        eval_env: The environment (single instance or VecEnv) to evaluate in
-        model_path: Path to the saved model (ignored when algorithm is WALL_FOLLOW, PURE_PURSUIT, LATTICE, or if model is provided)
-        algorithm: Algorithm type (SAC, PPO, DDPG, TD3, WALL_FOLLOW, PURE_PURSUIT, LATTICE)
-        num_episodes: Number of episodes to evaluate
-        model: Optional pre-loaded model object (takes precedence over model_path)
-        racing_mode: Whether to evaluate in racing mode with two cars
-        vecnorm_path: Path to the saved VecNormalize statistics file. If None, will look for a file
-                     in the same directory as model_path with "_vecnormalize.pkl" suffix.
-    """
-    # Set racing mode in environment if needed and not already set
-    if racing_mode:
-        logging.info("Evaluating in racing mode with two cars")
-        eval_env.racing_mode = racing_mode
-    
-    # Load VecNormalize statistics if provided or can be inferred
-    from stable_baselines3.common.vec_env import VecNormalize
+def load_model_for_evaluation(model_path, algorithm, model=None):
+    """Loads or returns the model for evaluation based on algorithm type."""
+    if algorithm == "WALL_FOLLOW":
+        from wall_follow import WallFollowPolicy
+        logging.info("Using wall-following policy for evaluation")
+        return WallFollowPolicy()
+    elif algorithm == "PURE_PURSUIT":
+        from pure_pursuit import PurePursuitPolicy
+        logging.info("Using pure pursuit policy for evaluation")
+        return PurePursuitPolicy()
+    elif algorithm == "LATTICE":
+        from lattice_planner import LatticePlannerPolicy
+        logging.info("Using lattice planner policy for evaluation")
+        return LatticePlannerPolicy()
+    elif model is None:
+        logging.info(f"Loading {algorithm} model from {model_path}")
+        
+        if algorithm == "PPO":
+            return PPO.load(model_path)
+        elif algorithm == "RECURRENT_PPO":
+            return RecurrentPPO.load(model_path)
+        elif algorithm == "DDPG":
+            return DDPG.load(model_path)
+        elif algorithm == "TD3":
+            return TD3.load(model_path)
+        elif algorithm == "SAC":
+            return SAC.load(model_path)
+        else:
+            raise ValueError(f"Unsupported algorithm: {algorithm}")
+    else:
+        logging.info("Using provided model for evaluation")
+        return model
 
-    # Infer vecnorm_path from model_path if not explicitly provided
+def setup_vecnormalize(eval_env, vecnorm_path, model_path):
+    """Sets up VecNormalize for the evaluation environment if needed."""
     if vecnorm_path is None and model_path is not None:
         model_dir = os.path.dirname(model_path)
         potential_vecnorm_path = os.path.join(model_dir, "vec_normalize.pkl")
@@ -294,464 +306,128 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
             vecnorm_path = potential_vecnorm_path
             logging.info(f"Found VecNormalize statistics at {vecnorm_path}")
 
-    # Always load VecNormalize wrapper with loaded statistics for evaluation
-    if vecnorm_path is not None:
-        if os.path.exists(vecnorm_path):
-            logging.info(f"Loading VecNormalize statistics from {vecnorm_path}")
-            # Avoid double-wrapping: use base environment if already wrapped
-            try:
-                base_env = eval_env.venv
-            except AttributeError:
-                base_env = eval_env
-            # Load normalization wrapper with saved stats
-            eval_env = VecNormalize.load(vecnorm_path, base_env)
-            # Disable further updates and reward normalization
-            eval_env.training = False
-            eval_env.norm_reward = False
-            logging.info("Environment wrapped with VecNormalize (training=False, norm_reward=False)")
-        else:
-            logging.warning(f"VecNormalize statistics file not found at {vecnorm_path}")
-    
-    # Check if eval_env is a VecEnv
-    is_vec_env = isinstance(eval_env, (DummyVecEnv, SubprocVecEnv, VecNormalize))
-    num_envs = eval_env.num_envs if is_vec_env else 1
-    
-    if algorithm == "WALL_FOLLOW":
-        from wall_follow import WallFollowPolicy
-        logging.info("Using wall-following policy for evaluation")
-        model = WallFollowPolicy()
-    elif algorithm == "PURE_PURSUIT":
-        from pure_pursuit import PurePursuitPolicy
-        logging.info("Using pure pursuit policy for evaluation")
-        # Get track from the environment if available
-        if is_vec_env:
-            track = eval_env.get_attr("track", indices=0)[0]  # Get track from first env
-        else:
-            track = getattr(eval_env, 'track', None)  # Access unwrapped env for track
-        model = PurePursuitPolicy(track=track)
-    elif algorithm == "LATTICE":
-        from lattice_planner import LatticePlannerPolicy
-        logging.info("Using lattice planner policy for evaluation")
-        # Get track from the environment if available
-        if is_vec_env:
-            track = eval_env.get_attr("track", indices=0)[0]  # Get track from first env
-        else:
-            track = getattr(eval_env, 'track', None)  # Access unwrapped env for track
-        model = LatticePlannerPolicy(track=track)
-    elif model is None:
-        # Only load model from path if not provided directly
-        logging.info(f"Loading {algorithm} model from {model_path}")
-        
-        # Load the appropriate model based on algorithm type
-        if algorithm == "PPO":
-            model = PPO.load(model_path)
-        elif algorithm == "RECURRENT_PPO":
-            model = RecurrentPPO.load(model_path)
-        elif algorithm == "DDPG":
-            model = DDPG.load(model_path)
-        elif algorithm == "TD3":
-            model = TD3.load(model_path)
-        elif algorithm == "SAC":
-            model = SAC.load(model_path)
-        else:
-            raise ValueError(f"Unsupported algorithm: {algorithm}")
-    
-        logging.info("Model loaded successfully")
-    else:
-        logging.info("Using provided model for evaluation")
-    
-    # Initialize metrics per environment
-    env_episode_rewards = [[] for _ in range(num_envs)]
-    env_episode_lengths = [[] for _ in range(num_envs)]
-    env_lap_times = [[] for _ in range(num_envs)]
-    
-    # Lists to store position and velocity data for plotting, per environment
-    env_positions = [[] for _ in range(num_envs)]
-    env_velocities = [[] for _ in range(num_envs)]
-    env_params = [None for _ in range(num_envs)]
-    
-    # For RecurrentPPO, we need to track LSTM states
-    is_recurrent = algorithm == "RECURRENT_PPO" or (hasattr(model, 'policy') and hasattr(model.policy, '_initial_state'))
-    
-    # Run evaluation episodes for each environment
-    for env_idx in range(num_envs):
-        logging.info(f"Evaluating on environment {env_idx+1}/{num_envs}")
-        
-        for episode in range(num_episodes):
-            logging.info(f"Starting evaluation episode {episode+1}/{num_episodes} on env {env_idx+1}")
-            
-            # Lists to store trajectory data for this episode
-            episode_positions = []
-            episode_velocities = []
-            
-            # Reset the environment
-            if is_vec_env:
-                obs = eval_env.env_method('reset', indices=[env_idx])[0][0]  # Reset specific env
-                obs = np.array([obs])
-                # Manually normalize if the environment is VecNormalize
-                if isinstance(eval_env, VecNormalize):
-                    obs = eval_env.normalize_obs(obs)
-            else:
-                obs = eval_env.reset()
-            
-            # For recurrent policies, initialize the LSTM states
-            lstm_states = None
-            episode_starts = np.ones((1,), dtype=bool)  # Mark the start of the episode
-            
-            terminated = False
-            truncated = False
-            total_reward = 0
-            step_count = 0
-            episode_start_time = time.time()
-            
-            while not (terminated or truncated):
-                # Render environment - only render the current environment
-                if is_vec_env:
-                    eval_env.env_method('render', indices=[env_idx])
-                else:
-                    eval_env.render()
-                
-                # Get action from model
-                # Extract the observation for a single environment from the batch
-                single_obs = obs[0] if isinstance(obs, np.ndarray) and obs.ndim > 1 else obs
-                
-                # For recurrent policies, we need to pass lstm_states and episode_starts
-                if is_recurrent:
-                    action, lstm_states = model.predict(
-                        single_obs, 
-                        state=lstm_states, 
-                        episode_start=episode_starts, 
-                        deterministic=True
-                    )
-                else:
-                    action, _states = model.predict(single_obs, deterministic=True)
-                
-                # Take step in environment
-                if is_vec_env:
-                    # Step only the current environment
-                    obs, reward, terminated, truncated, info = eval_env.env_method(
-                        'step', action, indices=[env_idx]
-                    )[0]
-                    
-                    # Get the position and velocity data from the info and observation
-                    try:
-                        # Try to get position data from the observation
-                        # Observation is structured as [s, ey, vel, yaw_angle, lidar_scan, ...]
-                        # For F110GymWrapper, we can extract frenet coordinates and velocity
-                        if len(obs) > 1083:  # Ensure observation has expected structure
-                            s = float(obs[0])  # Frenet arc length
-                            ey = float(obs[1])  # Lateral offset
-                            velocity = float(obs[2])  # Velocity
-                            yaw = float(obs[3])  # Yaw angle
-                            
-                            # Always capture the frenet coordinates as fallback
-                            episode_positions.append((s, ey))
-                            episode_velocities.append(velocity)
-                            
-                            # Try to get track from environment to convert to cartesian coordinates
-                            track = None
-                            try:
-                                track = eval_env.get_attr("track", indices=[env_idx])[0]
-                                if track is not None:
-                                    # Convert frenet to cartesian using track
-                                    try:
-                                        x_pos, y_pos, _ = track.frenet_to_cartesian(s, ey, 0)
-                                        # Replace last position with cartesian coordinates
-                                        episode_positions[-1] = (x_pos, y_pos)
-                                    except Exception:
-                                        pass
-                            except Exception:
-                                pass
-                                
-                            # Try to get position from info if available
-                            try:
-                                if "poses_x" in info and "poses_y" in info:
-                                    agent_idx = 0  # RL agent is index 0
-                                    x_pos = info["poses_x"][agent_idx]
-                                    y_pos = info["poses_y"][agent_idx]
-                                    # Replace last position with cartesian coordinates from info
-                                    episode_positions[-1] = (x_pos, y_pos)
-                            except Exception:
-                                pass
-                        else:
-                            # Observation doesn't have expected structure
-                            pass
-                    except Exception:
-                        pass
-                    
-                    obs = np.array([obs])
-                    # Manually normalize observation if needed
-                    if isinstance(eval_env, VecNormalize):
-                        obs = eval_env.normalize_obs(obs)
-                    terminated = bool(terminated)
-                    truncated = bool(truncated)
-                    reward = float(reward)
-                else:
-                    # Gymnasium envs return 5 values
-                    obs, reward, terminated, truncated, info = eval_env.step(action)
-                    
-                    # Try to get position and velocity data from single environment
-                    try:
-                        # For F110GymWrapper, extract from observation
-                        if len(obs) > 1083:  # Ensure observation has expected structure
-                            s = float(obs[0])  # Frenet arc length
-                            ey = float(obs[1])  # Lateral offset
-                            velocity = float(obs[2])  # Velocity
-                            yaw = float(obs[3])  # Yaw angle
-                            
-                            # Always capture the frenet coordinates as fallback
-                            episode_positions.append((s, ey))
-                            episode_velocities.append(velocity)
-                            # Keep track of position and velocity
-                                
-                        # Try to access track for coordinate conversion
-                        if hasattr(eval_env, "track") and eval_env.track is not None:
-                            try:
-                                x_pos, y_pos, _ = eval_env.track.frenet_to_cartesian(s, ey, 0)
-                                episode_positions[-1] = (x_pos, y_pos)  # Replace with cartesian coordinates
-                            except Exception as e:
-                                pass
-                        elif hasattr(info, "poses_x") and hasattr(info, "poses_y"):
-                            agent_idx = 0
-                            x_pos = info.poses_x[agent_idx]
-                            y_pos = info.poses_y[agent_idx]
-                            episode_positions[-1] = (x_pos, y_pos)  # Replace with cartesian coordinates
-                    except Exception as e:
-                        pass
-                
-                # Update episode_starts for recurrent policies
-                if is_recurrent:
-                    episode_starts = np.zeros((1,), dtype=bool)  # After first step, no longer episode start
-                
-                total_reward += reward
-                step_count += 1
-            
-            # Episode completed
-            episode_time = time.time() - episode_start_time
-            
-            # Record metrics for this environment
-            env_episode_rewards[env_idx].append(total_reward)
-            env_episode_lengths[env_idx].append(step_count)
-            env_lap_times[env_idx].append(episode_time)
-            
-            # Store trajectory data for plotting
-            if episode_positions and episode_velocities:
-                env_positions[env_idx].extend(episode_positions)
-                env_velocities[env_idx].extend(episode_velocities)
-            
-            logging.info(f"Episode {episode+1} finished:")
-            logging.info(f"  Reward: {total_reward:.2f}")
-            logging.info(f"  Length: {step_count} steps")
-            logging.info(f"  Time: {episode_time:.2f} seconds")
-            
-            # Reset for next episode
-            print(f"Episode {episode+1} finished. Resetting...")
-    
-    # Plot velocity profiles if we have collected data
-    any_data = any(len(pos) > 0 for pos in env_positions)
-    
-    if any_data:
+    if vecnorm_path is not None and os.path.exists(vecnorm_path):
+        logging.info(f"Loading VecNormalize statistics from {vecnorm_path}")
         try:
-            # Check if matplotlib is available
-            try:
-                import matplotlib
-                import matplotlib.pyplot as plt
-                from matplotlib import cm
-                import matplotlib.patches as mpatches
-            except ImportError:
-                logging.error("Matplotlib is not available. Please install matplotlib to generate velocity profile plots.")
-                return {
-                    "mean_reward": mean_reward,
-                    "std_reward": std_reward,
-                    "mean_episode_length": mean_episode_length,
-                    "mean_lap_time": mean_lap_time,
-                    "episode_rewards": all_rewards,
-                    "episode_lengths": all_lengths,
-                    "lap_times": all_lap_times,
-                    "env_stats": env_stats
-                }
-                
-            # Heatmap generation removed
-            
-            # Create output directory
-            # Use current directory if model_path is None
-            plot_dir = "./velocity_profiles_{0}".format(datetime.datetime.now().strftime('%Y%m%d_%H%M%S'))
-            
-            if model_path is not None:
-                try:
-                    output_dir = os.path.dirname(model_path)
-                    # If output_dir is empty string, use current directory
-                    if output_dir == "":
-                        output_dir = "."
-                    os.makedirs(output_dir, exist_ok=True)
-                    plot_dir = os.path.join(output_dir, f"velocity_profiles_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}")
-                except Exception:
-                    pass
-            
-            # Make sure we can create the plot directory
-            try:
-                os.makedirs(plot_dir, exist_ok=True)
-            except Exception:
-                plot_dir = "."
-            
-            # Create an overview plot that combines data from all environments
-            plt.figure(figsize=(15, 10))
-            plt.title(f"Velocity Profiles Overview - {algorithm} Algorithm")
-            
-            # Get track for overview plot
-            track = None
-            if is_vec_env:
-                try:
-                    track = eval_env.get_attr("track", indices=0)[0]
-                except (AttributeError, IndexError):
-                    track = None
-            else:
-                track = getattr(eval_env, 'track', None)
-            
-            # Colors for different environments
-            env_colors = plt.cm.tab10(np.linspace(0, 1, num_envs))
-            legend_patches = []
-            
-            # Track which coordinate system we're using
-            using_frenet = False
-            
-            # Create per-environment plots and add to overview
-            for env_idx in range(num_envs):
-                if len(env_positions[env_idx]) == 0:
-                    logging.warning(f"No position data collected for environment {env_idx+1}")
-                    continue
-                
-                logging.info(f"Creating plots for environment {env_idx+1}")
-                positions = np.array(env_positions[env_idx])
-                velocities = np.array(env_velocities[env_idx])
-                
-                # Skip if no data
-                if len(positions) == 0:
-                    continue
-                
-                # Determine if we're plotting in frenet or cartesian coordinates
-                is_frenet = False
-                if len(positions) > 0:
-                    # Check if first position's format looks like frenet coordinates (s, ey)
-                    # If s is large (track position) and ey is small (lateral deviation), it's likely frenet
-                    if abs(positions[0][0]) > 10 and abs(positions[0][1]) < 5:
-                        is_frenet = True
-                        using_frenet = True
-                        logging.info(f"Env {env_idx+1}: Plotting in Frenet coordinates (s, ey)")
-                
-                # Create a plot for this environment
-                plt.figure(figsize=(12, 8))
-                
-                # Format parameter string if available
-                param_string = ""
-                if env_params[env_idx] is not None:
-                    param_info = []
-                    for key, value in env_params[env_idx].items():
-                        # Only include the most relevant parameters to keep the title readable
-                        if key in ["mu", "C_Sf", "C_Sr", "m", "I", "lidar_noise_stddev"]:
-                            param_info.append(f"{key}={value:.3f}")
-                    if param_info:
-                        param_string = ", ".join(param_info)
-                
-                # Set plot title with environment info
-                plot_title = f"Velocity Profile - Env {env_idx+1}/{num_envs}"
-                if param_string:
-                    plot_title += f" ({param_string})"
-                
-                # Create a scatter plot of positions colored by velocity for this environment
-                scatter = plt.scatter(positions[:, 0], positions[:, 1], c=velocities, 
-                                      cmap='viridis', s=10, alpha=0.7)
-                
-                # Plot track centerline if available
-                if is_frenet:
-                    plt.xlabel('s - Distance along track (m)')
-                    plt.ylabel('ey - Lateral deviation (m)')
-                    
-                    # In Frenet coordinates, we can plot a horizontal line at ey=0 to represent centerline
-                    s_min, s_max = positions[:, 0].min(), positions[:, 0].max()
-                    plt.plot([s_min, s_max], [0, 0], 'k-', linewidth=1, alpha=0.5)
-                    
-                    # Set y-axis limits to focus on lateral deviation
-                    plt.ylim(-2, 2)
-                else:
-                    plt.xlabel('X position (m)')
-                    plt.ylabel('Y position (m)')
-                    
-                    # If track data is available, plot centerline
-                    if track is not None and hasattr(track, 'centerline') and hasattr(track.centerline, 'xs') and hasattr(track.centerline, 'ys'):
-                        plt.plot(track.centerline.xs, track.centerline.ys, 'k-', linewidth=1, alpha=0.5)
-                    
-                    # Equal aspect ratio for cartesian coordinates
-                    plt.axis('equal')
-                
-                plt.title(plot_title)
-                
-                # Add a color bar to show velocity scale
-                cbar = plt.colorbar(scatter)
-                cbar.set_label('Velocity (m/s)')
-                
-                # Save individual environment plot
-                env_plot_filename = os.path.join(plot_dir, f"velocity_profile_env_{env_idx+1}.png")
-                plt.savefig(env_plot_filename, dpi=300, bbox_inches='tight')
-                logging.info(f"Velocity profile for env {env_idx+1} saved to {env_plot_filename}")
-                plt.close()
-                
-                # Heatmap visualization removed
-                
-                # Add to overview plot
-                plt.figure(0)  # Switch back to overview figure
-                plt.scatter(positions[:, 0], positions[:, 1], c=env_colors[env_idx], 
-                           s=5, alpha=0.5, edgecolors='none')
-                
-                # Add to legend
-                legend_label = f"Env {env_idx+1}"
-                if param_string:
-                    legend_label += f" ({param_string})"
-                legend_patches.append(mpatches.Patch(color=env_colors[env_idx], label=legend_label))
-            
-            # Finalize overview plot if we have data
-            if legend_patches:
-                plt.figure(0)
-                
-                if using_frenet:
-                    plt.xlabel('s - Distance along track (m)')
-                    plt.ylabel('ey - Lateral deviation (m)')
-                    # Plot centerline in frenet space
-                    try:
-                        s_min = min([np.min(np.array(env_positions[i])[:, 0]) for i in range(num_envs) if len(env_positions[i]) > 0])
-                        s_max = max([np.max(np.array(env_positions[i])[:, 0]) for i in range(num_envs) if len(env_positions[i]) > 0])
-                        plt.plot([s_min, s_max], [0, 0], 'k-', linewidth=2)
-                        plt.ylim(-2, 2)
-                    except Exception as e:
-                        logging.error(f"Error plotting centerline in overview: {e}")
-                else:
-                    plt.xlabel('X position (m)')
-                    plt.ylabel('Y position (m)')
-                    # Plot track centerline if available
-                    if track is not None and hasattr(track, 'centerline') and hasattr(track.centerline, 'xs') and hasattr(track.centerline, 'ys'):
-                        plt.plot(track.centerline.xs, track.centerline.ys, 'k-', linewidth=2)
-                    plt.axis('equal')
-                
-                # Add legend
-                plt.legend(handles=legend_patches, loc='upper right', bbox_to_anchor=(1.3, 1))
-                
-                # Save overview plot
-                overview_filename = os.path.join(plot_dir, "velocity_profile_overview.png")
-                plt.savefig(overview_filename, dpi=300, bbox_inches='tight')
-                logging.info(f"Overview velocity profile saved to {overview_filename}")
-                plt.close()
-            else:
-                logging.warning("No data to plot in overview")
-                plt.close(0)  # Close the overview figure since we're not using it
-            
-            # Plot info removed
-            
-        except Exception as e:
-            logging.error(f"Error generating velocity profile plots: {e}")
-            import traceback
-            traceback.print_exc()
+            base_env = eval_env.venv
+        except AttributeError:
+            base_env = eval_env
+        
+        eval_env = VecNormalize.load(vecnorm_path, base_env)
+        eval_env.training = False
+        eval_env.norm_reward = False
+        logging.info("Environment wrapped with VecNormalize (training=False, norm_reward=False)")
     
-    # Compute per-environment statistics
+    return eval_env
+
+def run_evaluation_episode(eval_env, model, env_idx, is_vec_env, is_recurrent):
+    """Runs a single evaluation episode and returns metrics and trajectory data."""
+    if is_vec_env:
+        obs = eval_env.env_method('reset', indices=[env_idx])[0][0]
+        obs = np.array([obs])
+        if isinstance(eval_env, VecNormalize):
+            obs = eval_env.normalize_obs(obs)
+    else:
+        obs = eval_env.reset()
+    
+    lstm_states = None
+    episode_starts = np.ones((1,), dtype=bool)
+    
+    terminated = False
+    truncated = False
+    total_reward = 0
+    step_count = 0
+    episode_start_time = time.time()
+    
+    episode_positions = []
+    episode_velocities = []
+    
+    while not (terminated or truncated):
+        if is_vec_env:
+            eval_env.env_method('render', indices=[env_idx])
+        else:
+            eval_env.render()
+        
+        single_obs = obs[0] if isinstance(obs, np.ndarray) and obs.ndim > 1 else obs
+        
+        if is_recurrent:
+            action, lstm_states = model.predict(
+                single_obs, 
+                state=lstm_states, 
+                episode_start=episode_starts, 
+                deterministic=True
+            )
+        else:
+            action, _states = model.predict(single_obs, deterministic=True)
+        
+        if is_vec_env:
+            obs, reward, terminated, truncated, info = eval_env.env_method(
+                'step', action, indices=[env_idx]
+            )[0]
+            
+            position, velocity = extract_position_velocity(obs, eval_env, env_idx, info)
+            if position is not None and velocity is not None:
+                episode_positions.append(position)
+                episode_velocities.append(velocity)
+            
+            obs = np.array([obs])
+            if isinstance(eval_env, VecNormalize):
+                obs = eval_env.normalize_obs(obs)
+            terminated = bool(terminated)
+            truncated = bool(truncated)
+            reward = float(reward)
+        else:
+            obs, reward, terminated, truncated, info = eval_env.step(action)
+            position, velocity = extract_position_velocity(obs, eval_env, 0, info)
+            if position is not None and velocity is not None:
+                episode_positions.append(position)
+                episode_velocities.append(velocity)
+        
+        if is_recurrent:
+            episode_starts = np.zeros((1,), dtype=bool)
+        
+        total_reward += reward
+        step_count += 1
+    
+    episode_time = time.time() - episode_start_time
+    return total_reward, step_count, episode_time, episode_positions, episode_velocities
+
+def extract_position_velocity(obs, env, agent_idx=0, info=None):
+    """Extracts position and velocity data from observation and info."""
+    try:
+        if len(obs) > 1083:  # Ensure observation has expected structure
+            s = float(obs[0])  # Frenet arc length
+            ey = float(obs[1])  # Lateral offset
+            velocity = float(obs[2])  # Velocity
+            
+            position = (s, ey)  # Default to frenet coordinates
+            
+            # Try to get track to convert to cartesian
+            track = None
+            try:
+                if hasattr(env, 'get_attr'):
+                    track = env.get_attr("track", indices=[agent_idx])[0]
+                elif hasattr(env, "track"):
+                    track = env.track
+                    
+                if track is not None:
+                    x_pos, y_pos, _ = track.frenet_to_cartesian(s, ey, 0)
+                    position = (x_pos, y_pos)
+            except:
+                pass
+            
+            # Try to get position from info if available
+            if info and "poses_x" in info and "poses_y" in info:
+                position = (info["poses_x"][agent_idx], info["poses_y"][agent_idx])
+                
+            return position, velocity
+    except:
+        pass
+    
+    return None, None
+
+def compute_statistics(env_episode_rewards, env_episode_lengths, env_lap_times, num_envs):
+    """Computes statistics from evaluation results."""
     env_stats = []
     for env_idx in range(num_envs):
         env_mean_reward = np.mean(env_episode_rewards[env_idx])
@@ -775,7 +451,6 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
         logging.info(f"  Mean episode length: {env_mean_episode_length:.2f} steps")
         logging.info(f"  Mean lap time: {env_mean_lap_time:.2f} seconds")
     
-    # Compute overall statistics by flattening all environment data
     all_rewards = [reward for env_rewards in env_episode_rewards for reward in env_rewards]
     all_lengths = [length for env_lengths in env_episode_lengths for length in env_lengths]
     all_lap_times = [time for env_times in env_lap_times for time in env_times]
@@ -785,7 +460,7 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
     mean_episode_length = np.mean(all_lengths)
     mean_lap_time = np.mean(all_lap_times)
     
-    logging.info(f"Overall evaluation completed over {num_episodes * num_envs} episodes across {num_envs} environments:")
+    logging.info(f"Overall evaluation completed:")
     logging.info(f"  Mean reward: {mean_reward:.2f} ± {std_reward:.2f}")
     logging.info(f"  Mean episode length: {mean_episode_length:.2f} steps")
     logging.info(f"  Mean lap time: {mean_lap_time:.2f} seconds")
@@ -798,8 +473,214 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
         "episode_rewards": all_rewards,
         "episode_lengths": all_lengths,
         "lap_times": all_lap_times,
-        "env_stats": env_stats  # Added per-environment statistics
+        "env_stats": env_stats
     }
+
+def plot_velocity_profiles(env_positions, env_velocities, env_params, num_envs, track=None, model_path=None, algorithm="SAC"):
+    """Creates and saves velocity profile plots."""
+    try:
+        import matplotlib.pyplot as plt
+        from matplotlib import cm
+        import matplotlib.patches as mpatches
+    except ImportError:
+        logging.error("Matplotlib is not available. Skipping velocity profile plots.")
+        return
+    
+    # Create output directory
+    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    plot_dir = f"./velocity_profiles_{timestamp}"
+    
+    if model_path is not None:
+        try:
+            output_dir = os.path.dirname(model_path) or "."
+            os.makedirs(output_dir, exist_ok=True)
+            plot_dir = os.path.join(output_dir, f"velocity_profiles_{timestamp}")
+        except:
+            pass
+    
+    try:
+        os.makedirs(plot_dir, exist_ok=True)
+    except:
+        plot_dir = "."
+    
+    # Overview plot
+    plt.figure(figsize=(15, 10))
+    plt.title(f"Velocity Profiles Overview - {algorithm} Algorithm")
+    
+    env_colors = plt.cm.tab10(np.linspace(0, 1, num_envs))
+    legend_patches = []
+    using_frenet = False
+    
+    for env_idx in range(num_envs):
+        if len(env_positions[env_idx]) == 0:
+            continue
+        
+        positions = np.array(env_positions[env_idx])
+        velocities = np.array(env_velocities[env_idx])
+        
+        if len(positions) == 0:
+            continue
+        
+        # Determine coordinate system
+        is_frenet = abs(positions[0][0]) > 10 and abs(positions[0][1]) < 5
+        if is_frenet:
+            using_frenet = True
+        
+        # Individual env plot
+        plt.figure(figsize=(12, 8))
+        
+        # Format parameter string
+        param_string = ""
+        if env_params[env_idx] is not None:
+            param_info = []
+            for key, value in env_params[env_idx].items():
+                if key in ["mu", "C_Sf", "C_Sr", "m", "I", "lidar_noise_stddev"]:
+                    param_info.append(f"{key}={value:.3f}")
+            if param_info:
+                param_string = ", ".join(param_info)
+        
+        plot_title = f"Velocity Profile - Env {env_idx+1}/{num_envs}"
+        if param_string:
+            plot_title += f" ({param_string})"
+        
+        scatter = plt.scatter(positions[:, 0], positions[:, 1], c=velocities, 
+                              cmap='viridis', s=10, alpha=0.7)
+        
+        if is_frenet:
+            plt.xlabel('s - Distance along track (m)')
+            plt.ylabel('ey - Lateral deviation (m)')
+            s_min, s_max = positions[:, 0].min(), positions[:, 0].max()
+            plt.plot([s_min, s_max], [0, 0], 'k-', linewidth=1, alpha=0.5)
+            plt.ylim(-2, 2)
+        else:
+            plt.xlabel('X position (m)')
+            plt.ylabel('Y position (m)')
+            if track is not None and hasattr(track, 'centerline'):
+                plt.plot(track.centerline.xs, track.centerline.ys, 'k-', linewidth=1, alpha=0.5)
+            plt.axis('equal')
+        
+        plt.title(plot_title)
+        cbar = plt.colorbar(scatter)
+        cbar.set_label('Velocity (m/s)')
+        
+        env_plot_filename = os.path.join(plot_dir, f"velocity_profile_env_{env_idx+1}.png")
+        plt.savefig(env_plot_filename, dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        # Add to overview plot
+        plt.figure(0)
+        plt.scatter(positions[:, 0], positions[:, 1], c=env_colors[env_idx], 
+                   s=5, alpha=0.5, edgecolors='none')
+        
+        legend_label = f"Env {env_idx+1}"
+        if param_string:
+            legend_label += f" ({param_string})"
+        legend_patches.append(mpatches.Patch(color=env_colors[env_idx], label=legend_label))
+    
+    # Finalize overview plot
+    if legend_patches:
+        plt.figure(0)
+        
+        if using_frenet:
+            plt.xlabel('s - Distance along track (m)')
+            plt.ylabel('ey - Lateral deviation (m)')
+            try:
+                s_min = min([np.min(np.array(env_positions[i])[:, 0]) for i in range(num_envs) if len(env_positions[i]) > 0])
+                s_max = max([np.max(np.array(env_positions[i])[:, 0]) for i in range(num_envs) if len(env_positions[i]) > 0])
+                plt.plot([s_min, s_max], [0, 0], 'k-', linewidth=2)
+                plt.ylim(-2, 2)
+            except:
+                pass
+        else:
+            plt.xlabel('X position (m)')
+            plt.ylabel('Y position (m)')
+            if track is not None and hasattr(track, 'centerline'):
+                plt.plot(track.centerline.xs, track.centerline.ys, 'k-', linewidth=2)
+            plt.axis('equal')
+        
+        plt.legend(handles=legend_patches, loc='upper right', bbox_to_anchor=(1.3, 1))
+        
+        overview_filename = os.path.join(plot_dir, "velocity_profile_overview.png")
+        plt.savefig(overview_filename, dpi=300, bbox_inches='tight')
+    
+    plt.close('all')
+
+def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm="SAC", num_episodes=5, model=None, racing_mode=False, vecnorm_path=None):
+    """
+    Evaluates a trained model or wall-following policy on the environment.
+    """
+    if racing_mode:
+        logging.info("Evaluating in racing mode with two cars")
+        eval_env.racing_mode = racing_mode
+    
+    eval_env = setup_vecnormalize(eval_env, vecnorm_path, model_path)
+    
+    is_vec_env = isinstance(eval_env, (DummyVecEnv, SubprocVecEnv, VecNormalize))
+    num_envs = eval_env.num_envs if is_vec_env else 1
+    
+    # Initialize track model for expert policies
+    track = None
+    if algorithm in ["PURE_PURSUIT", "LATTICE"]:
+        if is_vec_env:
+            track = eval_env.get_attr("track", indices=0)[0]
+        else:
+            track = getattr(eval_env, 'track', None)
+    
+        # Update model with track information if needed
+        if model is None:
+            model = load_model_for_evaluation(model_path, algorithm)
+            if hasattr(model, 'track') and track is not None:
+                model.track = track
+    else:
+        model = load_model_for_evaluation(model_path, algorithm, model)
+    
+    # Initialize metrics and trajectory data storage
+    env_episode_rewards = [[] for _ in range(num_envs)]
+    env_episode_lengths = [[] for _ in range(num_envs)]
+    env_lap_times = [[] for _ in range(num_envs)]
+    env_positions = [[] for _ in range(num_envs)]
+    env_velocities = [[] for _ in range(num_envs)]
+    env_params = [None for _ in range(num_envs)]
+    
+    is_recurrent = algorithm == "RECURRENT_PPO" or (hasattr(model, 'policy') and hasattr(model.policy, '_initial_state'))
+    
+    # Evaluate on each environment
+    for env_idx in range(num_envs):
+        logging.info(f"Evaluating on environment {env_idx+1}/{num_envs}")
+        
+        for episode in range(num_episodes):
+            logging.info(f"Starting evaluation episode {episode+1}/{num_episodes} on env {env_idx+1}")
+            
+            # Run a single evaluation episode
+            total_reward, step_count, episode_time, episode_positions, episode_velocities = run_evaluation_episode(
+                eval_env, model, env_idx, is_vec_env, is_recurrent
+            )
+            
+            # Record metrics for this environment
+            env_episode_rewards[env_idx].append(total_reward)
+            env_episode_lengths[env_idx].append(step_count)
+            env_lap_times[env_idx].append(episode_time)
+            
+            # Store trajectory data for plotting
+            if episode_positions and episode_velocities:
+                env_positions[env_idx].extend(episode_positions)
+                env_velocities[env_idx].extend(episode_velocities)
+            
+            logging.info(f"Episode {episode+1} finished:")
+            logging.info(f"  Reward: {total_reward:.2f}")
+            logging.info(f"  Length: {step_count} steps")
+            logging.info(f"  Time: {episode_time:.2f} seconds")
+    
+    # Plot velocity profiles if we have collected data
+    any_data = any(len(pos) > 0 for pos in env_positions)
+    if any_data:
+        try:
+            plot_velocity_profiles(env_positions, env_velocities, env_params, num_envs, track, model_path, algorithm)
+        except Exception as e:
+            logging.error(f"Error generating velocity profile plots: {e}")
+    
+    # Compute statistics from evaluation results
+    return compute_statistics(env_episode_rewards, env_episode_lengths, env_lap_times, num_envs)
 
 def initialize_with_imitation_learning(model, env, imitation_policy_type="PURE_PURSUIT", total_transitions=1000_000, racing_mode=False):
     """
