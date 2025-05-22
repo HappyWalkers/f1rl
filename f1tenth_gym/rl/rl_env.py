@@ -299,7 +299,7 @@ class F110GymWrapper(gymnasium.Env):
             # Original single-agent code
             starting_idx = random.sample(range(len(self.waypoints)), 1)[0]
             x, y = self.waypoints[starting_idx][1], self.waypoints[starting_idx][2]
-            theta_noise = (2*random.random() - 1) * 0.1
+            theta_noise = (2*random.random() - 1) * 0.5
             theta = self.waypoints[starting_idx][3] + theta_noise
             starting_pos = np.array([[x, y, theta]])
             return starting_pos
@@ -381,6 +381,29 @@ class F110GymWrapper(gymnasium.Env):
             
             return starting_poses
 
+    def _update_action_buffer(self, action):
+        """
+        Updates the action buffer according to the domain randomization parameters
+        and returns the next action to execute.
+        
+        Args:
+            action: The current action from the agent
+            
+        Returns:
+            The action to execute (from the buffer or the current action)
+        """
+        # Push 0, 1, or 2 times with average 1
+        num_pushes = self.np_random.choice([0, 1, 2], p=[self.push_0_prob, self.push_1_prob, self.push_2_prob])
+        for _ in range(num_pushes):
+            self.action_buffer.append(action.copy())
+        
+        # Ensure buffer is not empty
+        if not self.action_buffer:
+            self.action_buffer.append(action.copy())
+        
+        # Get the action to execute from buffer
+        return self.action_buffer.popleft()
+
     def step(self, action):
         self.current_step += 1
 
@@ -391,20 +414,9 @@ class F110GymWrapper(gymnasium.Env):
             # Combine RL agent's action with opponent's action
             combined_actions = np.zeros((self.num_agents, 2))
             combined_actions[1] = opponent_action  # Opponent (now index 1)
-            combined_actions[0] = action           # RL agent (now index 0)
             
-            # --- Action Queuing Logic for RL agent only (now index 0) ---
-            # Push 0, 1, or 2 times with average 1
-            num_pushes = self.np_random.choice([0, 1, 2], p=[self.push_0_prob, self.push_1_prob, self.push_2_prob])
-            for _ in range(num_pushes):
-                self.action_buffer.append(action.copy())
-            
-            if not self.action_buffer:  # If queue is empty
-                self.action_buffer.append(action.copy())
-            
-            # Get the action to execute for RL agent (now index 0)
-            if self.action_buffer:
-                combined_actions[0] = self.action_buffer.popleft()
+            # Update action buffer and get action to execute for RL agent
+            combined_actions[0] = self._update_action_buffer(action)
             
             # Step the environment with combined actions
             obs, reward, done, info = self.env.step(combined_actions)
@@ -414,25 +426,8 @@ class F110GymWrapper(gymnasium.Env):
             
         else:
             # Original single-agent code
-            # --- Action Queuing Logic ---
-            # Add the new action to the buffer based on queue state
-            if not self.action_buffer:  # If queue is empty
-                self.action_buffer.append(action.copy())
-                self.action_buffer.append(action.copy())
-            else:
-                # Push 0, 1, or 2 times with average 1
-                num_pushes = self.np_random.choice([0, 1, 2], p=[self.push_0_prob, self.push_1_prob, self.push_2_prob])
-                for _ in range(num_pushes):
-                    self.action_buffer.append(action.copy())
-            
-            # --- Action Execution Logic ---
-            # Get the action to execute: oldest from queue or current if empty
-            if self.action_buffer:
-                action_to_execute = self.action_buffer.popleft()
-            else:
-                # Fallback: use the current action if queue is empty
-                logging.warning("Action buffer empty, executing current action.")
-                action_to_execute = action.copy()
+            # Update action buffer and get action to execute
+            action_to_execute = self._update_action_buffer(action)
 
             # --- Step Environment ---
             # Ensure action is the correct shape for the base env (expects batch dim)
