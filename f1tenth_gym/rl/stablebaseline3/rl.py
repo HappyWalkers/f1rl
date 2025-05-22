@@ -871,7 +871,7 @@ def create_vec_env(env_kwargs, seed, num_envs=1, num_param_cmbs=None, use_domain
             param_seed = seed + i
             rng = np.random.default_rng(param_seed)
             param_set = {
-                'mu': rng.uniform(0.6, 1.1),
+                'mu': rng.uniform(0.8, 1.1),
                 'C_Sf': rng.uniform(4.0, 5.5),
                 'C_Sr': rng.uniform(4.0, 5.5),
                 'm': rng.uniform(3.0, 4.5),

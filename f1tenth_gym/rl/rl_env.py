@@ -235,8 +235,16 @@ class F110GymWrapper(gymnasium.Env):
 
         # Apply lidar noise
         if self.lidar_noise_stddev > 0:
+            # First add Gaussian noise
             noise = self.np_random.normal(0, self.lidar_noise_stddev, lidar_scan.shape)
             lidar_scan += noise * lidar_scan
+            
+            # Then randomly mask out some values to zero
+            mask_probability = self.lidar_noise_stddev
+            mask = self.np_random.random(lidar_scan.shape) < mask_probability
+            lidar_scan[mask] = 0.0
+            
+            # Clip values to valid range
             lidar_scan = np.clip(lidar_scan, 0, 30.0) # Assuming max range is 30
 
         # Base observation without environment parameters
