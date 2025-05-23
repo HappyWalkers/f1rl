@@ -63,12 +63,19 @@ class F110GymWrapper(gymnasium.Env):
         self.min_distance_between_cars = 2.0  # Minimum safe distance between cars at reset
         self.rl_agent_idx = 0 if racing_mode else 0 # In racing mode, RL agent is idx 0
         
+        # Simulation timestep
+        self.timestep = 0.02
+        
         # Set number of agents based on racing mode
         if racing_mode and num_agents < 2:
             logging.info("Setting num_agents to 2 for racing mode")
             self.num_agents = 2
         else:
             self.num_agents = num_agents
+
+        # Variables to track previous values for acceleration and steering angle speed rewards
+        self.last_linear_velocity = None
+        self.last_steering_angle = None
 
         # Store DR params
         self.lidar_noise_stddev = lidar_noise_stddev
@@ -100,7 +107,7 @@ class F110GymWrapper(gymnasium.Env):
             # drive_control_mode='acc',
             # steering_control_mode='vel',
             waypoints=waypoints,
-            timestep=0.02,
+            timestep=self.timestep,
         )
 
         # Define the parameter vector dimensions - only include domain randomized params
@@ -268,6 +275,12 @@ class F110GymWrapper(gymnasium.Env):
         obs, reward, done, info = self.env.reset(initial_states=poses)
         self.current_step = 0
         self.last_frenet_arc_length = None
+        self.last_lap_counts = 0
+        
+        # Reset previous velocity and steering angle
+        self.last_linear_velocity = None
+        self.last_steering_angle = None
+        
         self.action_buffer.clear() # Clear action buffer on reset
         
         # Store observation for opponent in racing mode (now index 1)
@@ -418,8 +431,17 @@ class F110GymWrapper(gymnasium.Env):
             # Update action buffer and get action to execute for RL agent
             combined_actions[0] = self._update_action_buffer(action)
             
+            # Get current steering angle before stepping the environment
+            current_steering_angle = combined_actions[0][0] if self.last_steering_angle is not None else None
+            
             # Step the environment with combined actions
-            obs, reward, done, info = self.env.step(combined_actions)
+            try:
+                obs, reward, done, info = self.env.step(combined_actions)
+            except (ValueError, RuntimeError) as e:
+                if "Invalid state detected" in str(e) or "inf" in str(e) or "nan" in str(e).lower():
+                    logging.error(f"Numerical instability in simulation detected: {e}")
+                    logging.error(f"Actions that caused the error: {combined_actions}")
+                raise e
             
             # Update opponent observation for next step (now index 1)
             self.opponent_obs = self._process_observation(obs, agent_idx=1)
@@ -428,11 +450,20 @@ class F110GymWrapper(gymnasium.Env):
             # Original single-agent code
             # Update action buffer and get action to execute
             action_to_execute = self._update_action_buffer(action)
+            
+            # Get current steering angle before stepping the environment
+            current_steering_angle = action_to_execute[0] if self.last_steering_angle is not None else None
 
             # --- Step Environment ---
             # Ensure action is the correct shape for the base env (expects batch dim)
             logging.debug(f"action_to_execute: {action_to_execute}")
-            obs, reward, done, info = self.env.step(action_to_execute.reshape((1, 2)))
+            try:
+                obs, reward, done, info = self.env.step(action_to_execute.reshape((1, 2)))
+            except (ValueError, RuntimeError) as e:
+                if "Invalid state detected" in str(e) or "inf" in str(e) or "nan" in str(e).lower():
+                    logging.error(f"Numerical instability in simulation detected: {e}")
+                    logging.error(f"Action that caused the error: {action_to_execute}")
+                raise e
 
         logging.debug(f"obs: {obs}")
 
@@ -449,6 +480,20 @@ class F110GymWrapper(gymnasium.Env):
         angular_velocity = obs["ang_vels_z"][agent_idx]
         lap_counts = obs['lap_counts'][agent_idx]
         
+        # Calculate acceleration and steering angle speed if we have previous values
+        linear_acceleration = 0
+        steering_angle_speed = 0
+        
+        if self.last_linear_velocity is not None:
+            linear_acceleration = abs(linear_velocity - self.last_linear_velocity) / self.timestep
+            
+        if self.last_steering_angle is not None and current_steering_angle is not None:
+            steering_angle_speed = abs(current_steering_angle - self.last_steering_angle) / self.timestep
+        
+        # Store current values for next step
+        self.last_linear_velocity = linear_velocity
+        self.last_steering_angle = current_steering_angle
+        
         if (self.last_frenet_arc_length is not None and frenet_arc_length - self.last_frenet_arc_length < -10):
             self.last_frenet_arc_length = None
             
@@ -458,6 +503,8 @@ class F110GymWrapper(gymnasium.Env):
         linear_velocity_reward = abs(linear_velocity) - 1
         collision_punishment = -1 if collision else 0
         angular_velocity_punishment = - abs(angular_velocity)
+        acceleration_punishment = - linear_acceleration
+        steering_speed_punishment = - steering_angle_speed
         
         # Adjust reward for racing scenario
         if self.racing_mode:
@@ -466,10 +513,23 @@ class F110GymWrapper(gymnasium.Env):
             agent_s = frenet_arc_length 
             s_diff = agent_s - opponent_s
             overtake_reward = np.tanh(s_diff)
-            reward = progress_reward * 10 + safety_distance_reward * 0 + linear_velocity_reward * 1 + collision_punishment * 1000 + angular_velocity_punishment * 0 + overtake_reward * 0
+            reward = (progress_reward * 10 + 
+                     safety_distance_reward * 0 + 
+                     linear_velocity_reward * 1 + 
+                     collision_punishment * 1000 + 
+                     angular_velocity_punishment * 0 + 
+                     overtake_reward * 0 +
+                     acceleration_punishment * 0.01 +
+                     steering_speed_punishment * 0.01)
         else:
-            # Original reward function for single-agent
-            reward = progress_reward * 10 + safety_distance_reward * 0 + linear_velocity_reward * 1 + collision_punishment * 1000 + angular_velocity_punishment * 0 
+            # Original reward function for single-agent with added punishments
+            reward = (progress_reward * 10 + 
+                     safety_distance_reward * 0 + 
+                     linear_velocity_reward * 1 + 
+                     collision_punishment * 1000 + 
+                     angular_velocity_punishment * 0 +
+                     acceleration_punishment * 0.01 +
+                     steering_speed_punishment * 0.01)
         
         logging.debug(f"step: {self.current_step}")
         logging.debug(f"linear velocity: {linear_velocity:.2f}")
@@ -484,6 +544,8 @@ class F110GymWrapper(gymnasium.Env):
         logging.debug(f"linear velocity reward: {linear_velocity_reward:.2f}")
         logging.debug(f"collision punishment: {collision_punishment:.2f}")
         logging.debug(f"angular velocity punishment: {angular_velocity_punishment:.2f}")
+        logging.debug(f"acceleration punishment: {acceleration_punishment:.2f}")
+        logging.debug(f"steering speed punishment: {steering_speed_punishment:.2f}")
         if self.racing_mode:
             logging.debug(f"opponent s: {opponent_s:.2f}")
             logging.debug(f"agent s: {agent_s:.2f}")
