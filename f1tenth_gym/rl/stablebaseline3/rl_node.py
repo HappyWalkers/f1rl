@@ -194,6 +194,11 @@ class RLF1TenthController(Node):
             )
             # s_frame_max is now handled within Track.load_map or Track.from_numpy
             self.get_logger().info(f"Track loaded successfully using map index {map_index}")
+            
+            # Store waypoints for reset functionality
+            self.waypoints = self.track.waypoints  # Format: [s, x, y, psi, k, vx, ax]
+            self.get_logger().info(f"Loaded {len(self.waypoints)} waypoints for reset functionality")
+            
         except Exception as e:
             self.get_logger().error(f"Failed to load track using map index {map_index}: {e}")
             # Print traceback for more details
@@ -224,6 +229,37 @@ class RLF1TenthController(Node):
         
         # Create a timer for control loop
         self.timer = self.create_timer(0.05, self.control_loop)
+        
+        # Collision detection and reset variables
+        self.position_history = []  # Track recent positions
+        self.velocity_history = []  # Track recent velocities
+        self.command_history = []  # Track recent commands
+        self.position_history_size = 20  # Number of recent positions to keep
+        self.stuck_threshold = 0.1  # meters - if car moves less than this in N steps, it's stuck
+        self.collision_threshold = 0.5  # cosine similarity threshold for velocity vs command alignment
+        self.min_lidar_distance = 0.2  # meters - minimum safe distance from obstacles
+        self.collision_detected = False
+        self.reset_in_progress = False
+        self.reset_timer = 0
+        self.reset_duration = 100  # Number of control loops for reset sequence (increased for waypoint navigation)
+        self.collision_count = 0
+        self.last_collision_time = None
+        self.consecutive_collision_threshold = 3  # Reset if stuck for this many consecutive checks
+        self.consecutive_collision_count = 0
+        
+        # Reset controller state
+        self.reset_target_waypoint = None
+        self.reset_phase = 'backup'  # 'backup', 'align', 'complete'
+        self.reset_backup_duration = 50  # Control loops for backing up
+        self.reset_angle_tolerance = 0.2  # radians - tolerance for reaching target angle
+        self.reset_kp_steering = 2.0  # Proportional gain for steering control during alignment
+        
+        # Reset pose publisher (for simulator reset)
+        self.reset_pose_pub = self.create_publisher(
+            Odometry,
+            '/ego_racecar/reset_pose',
+            10
+        )
         
         self.get_logger().info(f"RL F1Tenth Controller initialized with {self.algorithm} algorithm")
 
@@ -341,7 +377,53 @@ class RLF1TenthController(Node):
         # Increment step counter
         self.current_step += 1
         
-        # Prepare observation
+        # Update position and velocity history
+        if self.odom_data:
+            self.position_history.append((self.odom_data['x'], self.odom_data['y']))
+            self.velocity_history.append(self.odom_data['velocity'])
+            
+            # Keep history size limited
+            if len(self.position_history) > self.position_history_size:
+                self.position_history.pop(0)
+            if len(self.velocity_history) > self.position_history_size:
+                self.velocity_history.pop(0)
+        
+        # Check for collision (only if not already in reset)
+        if not self.reset_in_progress and self.check_collision():
+            self.collision_detected = True
+        
+        # Handle reset sequence if collision was detected
+        if self.collision_detected or self.reset_in_progress:
+            reset_action = self.execute_reset()
+            if reset_action is not None:
+                # Still in reset sequence, send reset commands
+                self.reset_timer += 1
+                steering = float(reset_action[0])
+                speed = float(reset_action[1])
+                
+                # Send reset command
+                drive_msg = AckermannDriveStamped()
+                drive_msg.header.stamp = self.get_clock().now().to_msg()
+                drive_msg.header.frame_id = 'base_link'
+                drive_msg.drive.steering_angle = steering
+                drive_msg.drive.speed = speed
+                self.drive_pub.publish(drive_msg)
+                
+                # Log reset status with phase information
+                status_msg = f"Reset phase: {self.reset_phase} ({self.reset_timer}/{self.reset_duration})"
+                if self.reset_phase == 'align' and self.reset_target_waypoint:
+                    # Calculate orientation error
+                    curr_yaw = self.odom_data['yaw']
+                    target_yaw = self.reset_target_waypoint['yaw']
+                    yaw_error = target_yaw - curr_yaw
+                    yaw_error = np.arctan2(np.sin(yaw_error), np.cos(yaw_error))
+                    status_msg += f", Orientation error: {yaw_error:.3f} rad"
+                status_msg += f", Action: steering={steering:.2f}, speed={speed:.2f}"
+                self.get_logger().info(status_msg)
+                
+                return
+        
+        # Normal operation - prepare observation
         obs = self.prepare_observation()
         
         if obs is None:
@@ -377,6 +459,11 @@ class RLF1TenthController(Node):
         steering = float(action[0])
         speed = float(action[1])
         
+        # Store command in history
+        self.command_history.append((steering, speed))
+        if len(self.command_history) > self.position_history_size:
+            self.command_history.pop(0)
+        
         # Update last steering angle
         self.last_steering_angle = steering
         
@@ -402,8 +489,11 @@ class RLF1TenthController(Node):
         if not self.show_lidar_plot or self.lidar_data is None:
             return
         
+        # Convert to numpy array for consistent handling
+        lidar_array = np.array(self.lidar_data)
+        
         # Create angle array based on lidar data length
-        scan_length = len(self.lidar_data)
+        scan_length = len(lidar_array)
         angles = np.linspace(0, 2*np.pi, scan_length)
         indices = np.arange(scan_length)
         
@@ -415,10 +505,16 @@ class RLF1TenthController(Node):
         self.ax_polar.set_rlim(0, 30)
         
         # Plot the lidar scan in polar coordinates
-        self.ax_polar.scatter(angles, self.lidar_data, s=2, c='blue')
+        self.ax_polar.scatter(angles, lidar_array, s=2, c='blue')
         
         # Set title and show ego vehicle position in polar plot
-        self.ax_polar.set_title('LiDAR Scan - Polar View')
+        title = 'LiDAR Scan - Polar View'
+        if self.collision_detected or self.reset_in_progress:
+            title += ' [COLLISION DETECTED - RESETTING]'
+            self.ax_polar.set_facecolor('mistyrose')  # Light red background
+        else:
+            self.ax_polar.set_facecolor('white')
+        self.ax_polar.set_title(title)
         self.ax_polar.plot(0, 0, 'ro')  # Red dot at origin representing the vehicle
         
         # Add car shape representation (simple triangle)
@@ -427,13 +523,24 @@ class RLF1TenthController(Node):
         self.ax_polar.scatter(car_angles, car_radius, c='red', s=50)
         
         # Plot the lidar scan as range values
-        self.ax_range.scatter(indices, self.lidar_data, s=2, c='blue')
+        self.ax_range.scatter(indices, lidar_array, s=2, c='blue')
         self.ax_range.set_xlim(0, len(indices))
         self.ax_range.set_ylim(0, 30)
         self.ax_range.set_xlabel('Scan Index (0-1080)')
         self.ax_range.set_ylabel('Range (m)')
         self.ax_range.set_title('LiDAR Scan - Range View')
         self.ax_range.grid(True, linestyle='--', alpha=0.7)
+        
+        # Add collision statistics text
+        collision_text = f"Collisions: {self.collision_count}"
+        if self.collision_detected or self.reset_in_progress:
+            collision_text += f" | Reset Phase: {self.reset_phase} ({self.reset_timer}/{self.reset_duration})"
+            if self.reset_phase == 'align' and self.reset_target_waypoint and 'yaw' in self.reset_target_waypoint:
+                collision_text += f"\nTarget Orientation: {self.reset_target_waypoint['yaw']:.2f} rad"
+        self.ax_range.text(0.02, 0.98, collision_text, 
+                          transform=self.ax_range.transAxes,
+                          verticalalignment='top',
+                          bbox=dict(boxstyle='round', facecolor='wheat' if self.collision_detected else 'lightgreen', alpha=0.5))
         
         # Adjust layout
         self.fig.tight_layout()
@@ -444,6 +551,262 @@ class RLF1TenthController(Node):
         
         # Pause briefly to allow plot to update
         plt.pause(0.001)
+    
+    def detect_stuck(self):
+        """Detect if the car is stuck by checking if it hasn't moved much recently"""
+        if len(self.position_history) < self.position_history_size:
+            return False
+        
+        # Calculate total distance moved in recent history
+        total_distance = 0.0
+        for i in range(1, len(self.position_history)):
+            dx = self.position_history[i][0] - self.position_history[i-1][0]
+            dy = self.position_history[i][1] - self.position_history[i-1][1]
+            total_distance += np.sqrt(dx**2 + dy**2)
+        
+        # Check if car is stuck
+        avg_distance_per_step = total_distance / (len(self.position_history) - 1)
+        is_stuck = avg_distance_per_step < self.stuck_threshold / self.position_history_size
+        
+        if is_stuck:
+            self.get_logger().debug(f"Stuck detected: avg movement {avg_distance_per_step:.4f}m per step")
+        
+        return is_stuck
+    
+    def detect_velocity_command_mismatch(self):
+        """Detect collision by checking if actual velocity matches commanded velocity"""
+        if len(self.velocity_history) < 5 or len(self.command_history) < 5:
+            return False
+        
+        # Get recent average commanded speed (ignore steering for now)
+        avg_commanded_speed = np.mean([cmd[1] for cmd in self.command_history[-5:]])
+        avg_actual_speed = np.mean(self.velocity_history[-5:])
+        
+        # If we're commanding significant speed but not moving
+        if avg_commanded_speed > 1.0 and avg_actual_speed < 0.3:
+            self.get_logger().debug(f"Velocity mismatch: commanded {avg_commanded_speed:.2f}, actual {avg_actual_speed:.2f}")
+            return True
+        
+        return False
+    
+    def detect_lidar_collision(self):
+        """Detect collision using lidar data"""
+        if self.lidar_data is None:
+            return False
+        
+        # Check front lidar beams (roughly -30 to +30 degrees)
+        # Assuming 1080 beams covering 270 degrees, front is roughly indices 405 to 675
+        front_start = 405
+        front_end = 675
+        
+        # Convert to numpy array for vectorized operations
+        lidar_array = np.array(self.lidar_data)
+        front_lidar = lidar_array[front_start:front_end]
+        
+        # Filter out invalid readings
+        valid_readings = front_lidar[
+            (front_lidar > 0.05) & 
+            (front_lidar < 30.0) & 
+            (~np.isnan(front_lidar)) & 
+            (~np.isinf(front_lidar))
+        ]
+        
+        if len(valid_readings) > 0:
+            min_distance = np.min(valid_readings)
+            if min_distance < self.min_lidar_distance:
+                self.get_logger().debug(f"Lidar collision detected: min distance {min_distance:.3f}m")
+                return True
+        
+        return False
+    
+    def check_collision(self):
+        """Combined collision detection"""
+        # Check all collision conditions
+        is_stuck = self.detect_stuck()
+        velocity_mismatch = self.detect_velocity_command_mismatch()
+        lidar_collision = self.detect_lidar_collision()
+        
+        # Collision is detected if any condition is met
+        collision_detected = is_stuck or velocity_mismatch or lidar_collision
+        
+        if collision_detected:
+            self.consecutive_collision_count += 1
+            if self.consecutive_collision_count >= self.consecutive_collision_threshold:
+                self.collision_count += 1
+                self.last_collision_time = time.time()
+                self.get_logger().warning(
+                    f"Collision #{self.collision_count} detected! "
+                    f"Stuck: {is_stuck}, Velocity mismatch: {velocity_mismatch}, "
+                    f"Lidar collision: {lidar_collision}"
+                )
+                return True
+        else:
+            self.consecutive_collision_count = 0
+        
+        return False
+    
+    def find_reset_position(self):
+        """Find a suitable waypoint for orientation reference during reset"""
+        if self.odom_data is None or self.waypoints is None:
+            return None
+        
+        # Get current position
+        x = self.odom_data['x']
+        y = self.odom_data['y']
+        
+        try:
+            # Find current position on track
+            s, ey, ephi = self.track.cartesian_to_frenet(x, y, self.odom_data['yaw'], 
+                                                          s_guess=self.s_guess)
+            
+            # Find waypoint that's behind us by some distance
+            reset_distance = 3.0  # meters back along the track
+            target_s = s - reset_distance
+            
+            # Handle wrap-around
+            if target_s < 0:
+                target_s += self.track.s_frame_max
+            
+            # Find the closest waypoint to target_s
+            waypoint_s_values = self.waypoints[:, 0]  # s values are in column 0
+            closest_idx = np.argmin(np.abs(waypoint_s_values - target_s))
+            
+            # Get waypoint data: [s, x, y, psi, k, vx, ax]
+            waypoint = self.waypoints[closest_idx]
+            
+            reset_position = {
+                'waypoint_idx': closest_idx,
+                's': waypoint[0],
+                'yaw': waypoint[3]  # psi (heading angle)
+            }
+            
+            self.get_logger().info(
+                f"Found reset waypoint {closest_idx}: "
+                f"s={reset_position['s']:.2f}, "
+                f"yaw={reset_position['yaw']:.2f} rad"
+            )
+            
+            return reset_position
+            
+        except Exception as e:
+            self.get_logger().error(f"Failed to find reset waypoint: {e}")
+            return None
+    
+    def compute_reset_control(self):
+        """Compute control commands for alignment during reset"""
+        if self.reset_target_waypoint is None or self.odom_data is None:
+            return 0.0, 0.0
+        
+        # Current orientation
+        curr_yaw = self.odom_data['yaw']
+        
+        # Target orientation from waypoint
+        target_yaw = self.reset_target_waypoint['yaw']
+        
+        # Compute orientation error (normalize to [-pi, pi])
+        orientation_error = target_yaw - curr_yaw
+        orientation_error = np.arctan2(np.sin(orientation_error), np.cos(orientation_error))
+        
+        # Control logic for alignment phase
+        if self.reset_phase == 'align':
+            # Align with track orientation
+            if abs(orientation_error) > self.reset_angle_tolerance:
+                # Turn in place to align
+                steering = np.clip(self.reset_kp_steering * orientation_error, -0.4189, 0.4189)
+                speed = 0.3  # Very slow forward motion while aligning
+                return steering, speed
+            else:
+                # Alignment complete
+                self.reset_phase = 'complete'
+                self.get_logger().info(f"Reset alignment complete, orientation error: {orientation_error:.3f} rad")
+                return 0.0, 0.0
+        
+        return 0.0, 0.0
+    
+    def execute_reset(self):
+        """Execute the reset sequence: backup, align, complete"""
+        if not self.reset_in_progress:
+            # Initialize reset
+            self.reset_in_progress = True
+            self.reset_timer = 0
+            self.collision_detected = True
+            self.reset_phase = 'backup'
+            
+            # Clear histories
+            self.position_history.clear()
+            self.velocity_history.clear()
+            self.command_history.clear()
+            
+            # Reset LSTM states for recurrent policies
+            if self.is_recurrent:
+                self.reset_lstm_state()
+            
+            # Find reset waypoint for alignment reference
+            self.reset_target_waypoint = self.find_reset_position()
+            if self.reset_target_waypoint:
+                # Update s_guess for next iterations
+                self.s_guess = self.reset_target_waypoint['s']
+                self.get_logger().info(
+                    f"Reset target orientation: yaw={self.reset_target_waypoint['yaw']:.2f} rad"
+                )
+            else:
+                self.get_logger().error("Failed to find reset waypoint, using current orientation")
+                # Fall back to current orientation
+                self.reset_target_waypoint = {'yaw': self.odom_data['yaw']}
+        
+        # Execute reset phases
+        if self.reset_phase == 'backup':
+            # Phase 1: Back up to clear immediate obstacle
+            if self.reset_timer < self.reset_backup_duration:
+                return np.array([0.0, -1.0])  # straight, slow reverse
+            else:
+                self.reset_phase = 'align'
+                self.get_logger().info("Backup complete, starting alignment")
+                return np.array([0.0, 0.0])  # stop briefly
+                
+        elif self.reset_phase == 'align':
+            # Phase 2: Align with track orientation
+            steering, speed = self.compute_reset_control()
+            
+            if self.reset_timer < self.reset_duration:
+                return np.array([steering, speed])
+            else:
+                self.reset_phase = 'complete'
+                self.get_logger().info("Alignment complete, starting complete")
+                return np.array([0.0, 0.0])
+            
+        elif self.reset_phase == 'complete':
+            # Reset complete
+            self.reset_in_progress = False
+            self.collision_detected = False
+            self.reset_timer = 0
+            self.consecutive_collision_count = 0
+            self.reset_target_waypoint = None
+            self.get_logger().info("Reset sequence completed successfully")
+            return None
+        
+        # Default: stop
+        return np.array([0.0, 0.0])
+    
+    def publish_reset_pose(self, reset_pose):
+        """Publish reset pose for simulator (if supported)"""
+        try:
+            reset_msg = Odometry()
+            reset_msg.header.stamp = self.get_clock().now().to_msg()
+            reset_msg.header.frame_id = 'map'
+            reset_msg.pose.pose.position.x = reset_pose['x']
+            reset_msg.pose.pose.position.y = reset_pose['y']
+            reset_msg.pose.pose.position.z = 0.0
+            
+            # Convert yaw to quaternion
+            reset_msg.pose.pose.orientation.w = np.cos(reset_pose['yaw'] / 2)
+            reset_msg.pose.pose.orientation.x = 0.0
+            reset_msg.pose.pose.orientation.y = 0.0
+            reset_msg.pose.pose.orientation.z = np.sin(reset_pose['yaw'] / 2)
+            
+            self.reset_pose_pub.publish(reset_msg)
+        except Exception as e:
+            self.get_logger().error(f"Failed to publish reset pose: {e}")
     
     def reset_lstm_state(self):
         """Reset LSTM states when needed (e.g., at the beginning of a new episode)"""
@@ -466,6 +829,22 @@ def main(args=None):
     parser.add_argument('--map_dir', type=str, default='./f1tenth_racetracks/',
                         help='Directory containing the track maps')
     
+    # Collision detection parameters
+    parser.add_argument('--enable_collision_reset', action='store_true', default=True,
+                        help='Enable automatic collision detection and reset')
+    parser.add_argument('--stuck_threshold', type=float, default=0.1,
+                        help='Distance threshold (m) for stuck detection')
+    parser.add_argument('--min_lidar_distance', type=float, default=0.2,
+                        help='Minimum safe distance (m) from obstacles')
+    parser.add_argument('--reset_duration', type=int, default=150,
+                        help='Number of control loops for reset sequence')
+    parser.add_argument('--reset_backup_duration', type=int, default=50,
+                        help='Number of control loops for backing up')
+    parser.add_argument('--reset_angle_tolerance', type=float, default=0.2,
+                        help='Angle tolerance (rad) for aligning with track')
+    parser.add_argument('--reset_kp_steering', type=float, default=2.0,
+                        help='Proportional gain for reset steering control')
+    
     # Parse known args to avoid conflicts with ROS args
     parsed_args, unknown = parser.parse_known_args(args=args)
     
@@ -480,6 +859,24 @@ def main(args=None):
         map_index=parsed_args.map_index,
         map_dir_=parsed_args.map_dir
     )
+    
+    # Update collision detection parameters if provided
+    if hasattr(parsed_args, 'enable_collision_reset') and not parsed_args.enable_collision_reset:
+        controller.get_logger().info("Collision detection and auto-reset disabled")
+        controller.check_collision = lambda: False  # Disable collision detection
+    
+    if hasattr(parsed_args, 'stuck_threshold'):
+        controller.stuck_threshold = parsed_args.stuck_threshold
+    if hasattr(parsed_args, 'min_lidar_distance'):
+        controller.min_lidar_distance = parsed_args.min_lidar_distance
+    if hasattr(parsed_args, 'reset_duration'):
+        controller.reset_duration = parsed_args.reset_duration
+    if hasattr(parsed_args, 'reset_backup_duration'):
+        controller.reset_backup_duration = parsed_args.reset_backup_duration
+    if hasattr(parsed_args, 'reset_angle_tolerance'):
+        controller.reset_angle_tolerance = parsed_args.reset_angle_tolerance
+    if hasattr(parsed_args, 'reset_kp_steering'):
+        controller.reset_kp_steering = parsed_args.reset_kp_steering
     
     try:
         rclpy.spin(controller)
