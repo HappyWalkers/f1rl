@@ -605,6 +605,168 @@ def plot_velocity_profiles(env_positions, env_velocities, env_params, num_envs, 
     
     plt.close('all')
 
+def plot_acceleration_profiles(env_positions, env_velocities, env_params, num_envs, track=None, model_path=None, algorithm="SAC"):
+    """Creates and saves 2D acceleration profile plots with color-coded acceleration values."""
+    try:
+        import matplotlib.pyplot as plt
+        from matplotlib import cm
+        import matplotlib.patches as mpatches
+    except ImportError:
+        logging.error("Matplotlib is not available. Skipping acceleration profile plots.")
+        return
+    
+    # Create output directory
+    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    plot_dir = f"./acceleration_profiles_{timestamp}"
+    
+    if model_path is not None:
+        try:
+            output_dir = os.path.dirname(model_path) or "."
+            os.makedirs(output_dir, exist_ok=True)
+            plot_dir = os.path.join(output_dir, f"acceleration_profiles_{timestamp}")
+        except:
+            pass
+    
+    try:
+        os.makedirs(plot_dir, exist_ok=True)
+    except:
+        plot_dir = "."
+    
+    # Calculate accelerations for each environment
+    env_accelerations = []
+    for env_idx in range(num_envs):
+        if len(env_velocities[env_idx]) < 2:
+            env_accelerations.append([])
+            continue
+        
+        velocities = np.array(env_velocities[env_idx])
+        # Calculate acceleration as change in velocity between consecutive steps
+        # Assuming constant time step (dt = 0.02 for 50Hz update rate)
+        dt = 0.02
+        accelerations = np.diff(velocities) / dt
+        
+        # Handle potential numerical issues
+        accelerations = np.clip(accelerations, -5, 5)  # Reasonable acceleration limits for F1/10
+        env_accelerations.append(accelerations.tolist())
+    
+    # Overview plot
+    plt.figure(figsize=(15, 10))
+    plt.title(f"Acceleration Profiles Overview - {algorithm} Algorithm")
+    
+    env_colors = plt.cm.tab10(np.linspace(0, 1, num_envs))
+    legend_patches = []
+    using_frenet = False
+    
+    for env_idx in range(num_envs):
+        if len(env_positions[env_idx]) < 2 or len(env_accelerations[env_idx]) == 0:
+            continue
+        
+        positions = np.array(env_positions[env_idx])
+        accelerations = np.array(env_accelerations[env_idx])
+        
+        # Skip first position since we lose one point when calculating acceleration
+        positions = positions[1:]
+        
+        if len(positions) == 0 or len(accelerations) == 0:
+            continue
+        
+        # Determine coordinate system
+        is_frenet = abs(positions[0][0]) > 10 and abs(positions[0][1]) < 5
+        if is_frenet:
+            using_frenet = True
+        
+        # Individual env plot
+        plt.figure(figsize=(12, 8))
+        
+        # Format parameter string
+        param_string = ""
+        if env_params[env_idx] is not None:
+            param_info = []
+            for key, value in env_params[env_idx].items():
+                if key in ["mu", "C_Sf", "C_Sr", "m", "I", "lidar_noise_stddev"]:
+                    param_info.append(f"{key}={value:.3f}")
+            if param_info:
+                param_string = ", ".join(param_info)
+        
+        plot_title = f"Acceleration Profile - Env {env_idx+1}/{num_envs}"
+        if param_string:
+            plot_title += f" ({param_string})"
+        
+        # Create scatter plot with acceleration as color
+        # Center the colormap around zero for proper diverging visualization
+        vmax = max(abs(accelerations.min()), abs(accelerations.max()))
+        scatter = plt.scatter(positions[:, 0], positions[:, 1], c=accelerations, 
+                              cmap='RdBu_r', s=15, alpha=0.7, edgecolors='none',
+                              vmin=-vmax, vmax=vmax)
+        
+        if is_frenet:
+            plt.xlabel('s - Distance along track (m)')
+            plt.ylabel('ey - Lateral deviation (m)')
+            s_min, s_max = positions[:, 0].min(), positions[:, 0].max()
+            plt.plot([s_min, s_max], [0, 0], 'k-', linewidth=1, alpha=0.5)
+            plt.ylim(-2, 2)
+        else:
+            plt.xlabel('X position (m)')
+            plt.ylabel('Y position (m)')
+            if track is not None and hasattr(track, 'centerline'):
+                plt.plot(track.centerline.xs, track.centerline.ys, 'k-', linewidth=1, alpha=0.5)
+            plt.axis('equal')
+        
+        plt.title(plot_title)
+        cbar = plt.colorbar(scatter)
+        cbar.set_label('Acceleration (m/s²)')
+        
+        # Add text annotation to clarify colormap
+        if len(accelerations) > 0:
+            ax = plt.gca()
+            ax.text(0.02, 0.98, 'Red: Accelerating\nBlue: Braking', 
+                   transform=ax.transAxes, verticalalignment='top',
+                   bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
+                   fontsize=9)
+        
+        env_plot_filename = os.path.join(plot_dir, f"acceleration_profile_env_{env_idx+1}.png")
+        plt.savefig(env_plot_filename, dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        # Add to overview plot
+        plt.figure(0)
+        plt.scatter(positions[:, 0], positions[:, 1], c=env_colors[env_idx], 
+                   s=8, alpha=0.6, edgecolors='none')
+        
+        legend_label = f"Env {env_idx+1}"
+        if param_string:
+            legend_label += f" ({param_string})"
+        legend_patches.append(mpatches.Patch(color=env_colors[env_idx], label=legend_label))
+    
+    # Finalize overview plot
+    if legend_patches:
+        plt.figure(0)
+        
+        if using_frenet:
+            plt.xlabel('s - Distance along track (m)')
+            plt.ylabel('ey - Lateral deviation (m)')
+            try:
+                s_min = min([np.min(np.array(env_positions[i])[1:, 0]) for i in range(num_envs) if len(env_positions[i]) > 1])
+                s_max = max([np.max(np.array(env_positions[i])[1:, 0]) for i in range(num_envs) if len(env_positions[i]) > 1])
+                plt.plot([s_min, s_max], [0, 0], 'k-', linewidth=2)
+                plt.ylim(-2, 2)
+            except:
+                pass
+        else:
+            plt.xlabel('X position (m)')
+            plt.ylabel('Y position (m)')
+            if track is not None and hasattr(track, 'centerline'):
+                plt.plot(track.centerline.xs, track.centerline.ys, 'k-', linewidth=2)
+            plt.axis('equal')
+        
+        plt.legend(handles=legend_patches, loc='upper right', bbox_to_anchor=(1.3, 1))
+        
+        overview_filename = os.path.join(plot_dir, "acceleration_profile_overview.png")
+        plt.savefig(overview_filename, dpi=300, bbox_inches='tight')
+    
+    plt.close('all')
+    logging.info(f"2D acceleration profile plots saved to {plot_dir}")
+
 def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm="SAC", num_episodes=5, model=None, racing_mode=False, vecnorm_path=None):
     """
     Evaluates a trained model or wall-following policy on the environment.
@@ -678,6 +840,12 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
             plot_velocity_profiles(env_positions, env_velocities, env_params, num_envs, track, model_path, algorithm)
         except Exception as e:
             logging.error(f"Error generating velocity profile plots: {e}")
+        
+        # Plot acceleration profiles
+        try:
+            plot_acceleration_profiles(env_positions, env_velocities, env_params, num_envs, track, model_path, algorithm)
+        except Exception as e:
+            logging.error(f"Error generating acceleration profile plots: {e}")
     
     # Compute statistics from evaluation results
     return compute_statistics(env_episode_rewards, env_episode_lengths, env_lap_times, num_envs)
