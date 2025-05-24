@@ -426,8 +426,8 @@ def extract_position_velocity(obs, env, agent_idx=0, info=None):
     
     return None, None
 
-def compute_statistics(env_episode_rewards, env_episode_lengths, env_lap_times, num_envs):
-    """Computes statistics from evaluation results."""
+def compute_statistics(env_episode_rewards, env_episode_lengths, env_lap_times, env_velocities, num_envs):
+    """Computes statistics from evaluation results including velocity and acceleration."""
     env_stats = []
     for env_idx in range(num_envs):
         env_mean_reward = np.mean(env_episode_rewards[env_idx])
@@ -435,44 +435,166 @@ def compute_statistics(env_episode_rewards, env_episode_lengths, env_lap_times, 
         env_mean_episode_length = np.mean(env_episode_lengths[env_idx])
         env_mean_lap_time = np.mean(env_lap_times[env_idx])
         
+        # Compute velocity and acceleration statistics
+        velocities = np.array(env_velocities[env_idx]) if len(env_velocities[env_idx]) > 0 else np.array([])
+        if len(velocities) > 0:
+            env_mean_velocity = np.mean(velocities)
+            env_std_velocity = np.std(velocities)
+            env_max_velocity = np.max(velocities)
+            env_min_velocity = np.min(velocities)
+            
+            # Calculate acceleration (assuming dt = 0.02 for 50Hz update rate)
+            if len(velocities) > 1:
+                dt = 0.02
+                accelerations = np.diff(velocities) / dt
+                accelerations = np.clip(accelerations, -10, 10)  # Clip extreme values
+                
+                env_mean_acceleration = np.mean(accelerations)
+                env_std_acceleration = np.std(accelerations)
+                env_max_acceleration = np.max(accelerations)
+                env_min_acceleration = np.min(accelerations)
+                
+                # Separate positive (acceleration) and negative (braking) accelerations
+                positive_accel = accelerations[accelerations > 0]
+                negative_accel = accelerations[accelerations < 0]
+                
+                env_mean_positive_accel = np.mean(positive_accel) if len(positive_accel) > 0 else 0.0
+                env_mean_negative_accel = np.mean(negative_accel) if len(negative_accel) > 0 else 0.0
+            else:
+                env_mean_acceleration = 0.0
+                env_std_acceleration = 0.0
+                env_max_acceleration = 0.0
+                env_min_acceleration = 0.0
+                env_mean_positive_accel = 0.0
+                env_mean_negative_accel = 0.0
+        else:
+            env_mean_velocity = 0.0
+            env_std_velocity = 0.0
+            env_max_velocity = 0.0
+            env_min_velocity = 0.0
+            env_mean_acceleration = 0.0
+            env_std_acceleration = 0.0
+            env_max_acceleration = 0.0
+            env_min_acceleration = 0.0
+            env_mean_positive_accel = 0.0
+            env_mean_negative_accel = 0.0
+        
         env_stats.append({
             "env_idx": env_idx,
             "mean_reward": env_mean_reward,
             "std_reward": env_std_reward,
             "mean_episode_length": env_mean_episode_length,
             "mean_lap_time": env_mean_lap_time,
+            "mean_velocity": env_mean_velocity,
+            "std_velocity": env_std_velocity,
+            "max_velocity": env_max_velocity,
+            "min_velocity": env_min_velocity,
+            "mean_acceleration": env_mean_acceleration,
+            "std_acceleration": env_std_acceleration,
+            "max_acceleration": env_max_acceleration,
+            "min_acceleration": env_min_acceleration,
+            "mean_positive_acceleration": env_mean_positive_accel,
+            "mean_braking": env_mean_negative_accel,
             "episode_rewards": env_episode_rewards[env_idx],
             "episode_lengths": env_episode_lengths[env_idx],
-            "lap_times": env_lap_times[env_idx]
+            "lap_times": env_lap_times[env_idx],
+            "velocities": env_velocities[env_idx]
         })
         
         logging.info(f"Environment {env_idx+1} statistics:")
         logging.info(f"  Mean reward: {env_mean_reward:.2f} ± {env_std_reward:.2f}")
         logging.info(f"  Mean episode length: {env_mean_episode_length:.2f} steps")
         logging.info(f"  Mean lap time: {env_mean_lap_time:.2f} seconds")
+        logging.info(f"  Mean velocity: {env_mean_velocity:.2f} ± {env_std_velocity:.2f} m/s")
+        logging.info(f"  Velocity range: {env_min_velocity:.2f} - {env_max_velocity:.2f} m/s")
+        logging.info(f"  Mean acceleration: {env_mean_acceleration:.2f} ± {env_std_acceleration:.2f} m/s²")
+        logging.info(f"  Acceleration range: {env_min_acceleration:.2f} - {env_max_acceleration:.2f} m/s²")
+        logging.info(f"  Mean positive acceleration: {env_mean_positive_accel:.2f} m/s²")
+        logging.info(f"  Mean braking: {env_mean_negative_accel:.2f} m/s²")
     
+    # Compute overall statistics
     all_rewards = [reward for env_rewards in env_episode_rewards for reward in env_rewards]
     all_lengths = [length for env_lengths in env_episode_lengths for length in env_lengths]
     all_lap_times = [time for env_times in env_lap_times for time in env_times]
+    all_velocities = [vel for env_vels in env_velocities for vel in env_vels]
     
     mean_reward = np.mean(all_rewards)
     std_reward = np.std(all_rewards)
     mean_episode_length = np.mean(all_lengths)
     mean_lap_time = np.mean(all_lap_times)
     
+    # Overall velocity and acceleration statistics
+    if len(all_velocities) > 0:
+        all_velocities = np.array(all_velocities)
+        mean_velocity = np.mean(all_velocities)
+        std_velocity = np.std(all_velocities)
+        max_velocity = np.max(all_velocities)
+        min_velocity = np.min(all_velocities)
+        
+        # Calculate overall acceleration
+        if len(all_velocities) > 1:
+            dt = 0.02
+            all_accelerations = []
+            # Calculate accelerations for each environment separately to maintain temporal continuity
+            for env_vels in env_velocities:
+                if len(env_vels) > 1:
+                    env_accels = np.diff(np.array(env_vels)) / dt
+                    env_accels = np.clip(env_accels, -10, 10)
+                    all_accelerations.extend(env_accels)
+            
+            if len(all_accelerations) > 0:
+                all_accelerations = np.array(all_accelerations)
+                mean_acceleration = np.mean(all_accelerations)
+                std_acceleration = np.std(all_accelerations)
+                max_acceleration = np.max(all_accelerations)
+                min_acceleration = np.min(all_accelerations)
+                
+                positive_accel = all_accelerations[all_accelerations > 0]
+                negative_accel = all_accelerations[all_accelerations < 0]
+                
+                mean_positive_accel = np.mean(positive_accel) if len(positive_accel) > 0 else 0.0
+                mean_negative_accel = np.mean(negative_accel) if len(negative_accel) > 0 else 0.0
+            else:
+                mean_acceleration = std_acceleration = max_acceleration = min_acceleration = 0.0
+                mean_positive_accel = mean_negative_accel = 0.0
+        else:
+            mean_acceleration = std_acceleration = max_acceleration = min_acceleration = 0.0
+            mean_positive_accel = mean_negative_accel = 0.0
+    else:
+        mean_velocity = std_velocity = max_velocity = min_velocity = 0.0
+        mean_acceleration = std_acceleration = max_acceleration = min_acceleration = 0.0
+        mean_positive_accel = mean_negative_accel = 0.0
+    
     logging.info(f"Overall evaluation completed:")
     logging.info(f"  Mean reward: {mean_reward:.2f} ± {std_reward:.2f}")
     logging.info(f"  Mean episode length: {mean_episode_length:.2f} steps")
     logging.info(f"  Mean lap time: {mean_lap_time:.2f} seconds")
+    logging.info(f"  Mean velocity: {mean_velocity:.2f} ± {std_velocity:.2f} m/s")
+    logging.info(f"  Velocity range: {min_velocity:.2f} - {max_velocity:.2f} m/s")
+    logging.info(f"  Mean acceleration: {mean_acceleration:.2f} ± {std_acceleration:.2f} m/s²")
+    logging.info(f"  Acceleration range: {min_acceleration:.2f} - {max_acceleration:.2f} m/s²")
+    logging.info(f"  Mean positive acceleration: {mean_positive_accel:.2f} m/s²")
+    logging.info(f"  Mean braking: {mean_negative_accel:.2f} m/s²")
     
     return {
         "mean_reward": mean_reward,
         "std_reward": std_reward,
         "mean_episode_length": mean_episode_length,
         "mean_lap_time": mean_lap_time,
+        "mean_velocity": mean_velocity,
+        "std_velocity": std_velocity,
+        "max_velocity": max_velocity,
+        "min_velocity": min_velocity,
+        "mean_acceleration": mean_acceleration,
+        "std_acceleration": std_acceleration,
+        "max_acceleration": max_acceleration,
+        "min_acceleration": min_acceleration,
+        "mean_positive_acceleration": mean_positive_accel,
+        "mean_braking": mean_negative_accel,
         "episode_rewards": all_rewards,
         "episode_lengths": all_lengths,
         "lap_times": all_lap_times,
+        "velocities": all_velocities,
         "env_stats": env_stats
     }
 
@@ -848,7 +970,7 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
             logging.error(f"Error generating acceleration profile plots: {e}")
     
     # Compute statistics from evaluation results
-    return compute_statistics(env_episode_rewards, env_episode_lengths, env_lap_times, num_envs)
+    return compute_statistics(env_episode_rewards, env_episode_lengths, env_lap_times, env_velocities, num_envs)
 
 def initialize_with_imitation_learning(model, env, imitation_policy_type="PURE_PURSUIT", total_transitions=1000_000, racing_mode=False):
     """
