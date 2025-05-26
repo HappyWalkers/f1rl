@@ -53,7 +53,8 @@ class RLF1TenthController(Node):
     ROS Node that uses a trained RL model to control an F1Tenth car
     """
     def __init__(self, algorithm="SAC", model_path="./logs/best_model/best_model.zip", 
-                 vecnorm_path=None, map_index=63, map_dir_="./f1tenth_racetracks/"):
+                 vecnorm_path=None, map_index=63, map_dir_="./f1tenth_racetracks/",
+                 include_lidar_in_obs=True):
         super().__init__('rl_f1tenth_controller')
         
         # Topics
@@ -64,6 +65,7 @@ class RLF1TenthController(Node):
         
         # Store configuration as attributes
         self.algorithm = algorithm
+        self.include_lidar_in_obs = include_lidar_in_obs
         model_path = os.path.expanduser(model_path)
         
         # Add last steering angle tracking
@@ -100,11 +102,23 @@ class RLF1TenthController(Node):
         self.get_logger().info(f"Loading {self.algorithm} model from {model_path}")
         try:
             # Create observation and action spaces matching training environment
-            # Updated shape to 1084: [s, ey, vel, yaw_angle] + 1080 lidar
+            # Calculate observation space dimensions based on lidar inclusion
+            state_dim = 4  # [s, ey, vel, yaw_angle]
+            lidar_dim = 1080 if self.include_lidar_in_obs else 0
+            total_obs_dim = state_dim + lidar_dim
+            
+            # Create observation space with appropriate dimensions
+            low_values = [-1000.0, -5.0, -5.0, -np.pi]
+            high_values = [1000.0, 5.0, 12.0, np.pi]
+            
+            if self.include_lidar_in_obs:
+                low_values.extend(np.zeros(1080))
+                high_values.extend(np.full(1080, 30.0))
+            
             observation_space = spaces.Box(
-                low=np.concatenate(([-1000.0, -5.0, -5.0, -np.pi], np.zeros(1080))),
-                high=np.concatenate(([1000.0, 5.0, 12.0, np.pi], np.full(1080, 30.0))),
-                shape=(1084,), dtype=np.float32
+                low=np.array(low_values),
+                high=np.array(high_values),
+                shape=(total_obs_dim,), dtype=np.float32
             )
             action_space = spaces.Box(
                 low=np.array([-0.4189, 1]), 
@@ -332,18 +346,22 @@ class RLF1TenthController(Node):
             yaw, # Keep global yaw for consistency with training env observation
         ]
 
-        # Combine with lidar scans
-        # Ensure lidar data has 1080 points, pad if necessary (shouldn't be needed with real lidar)
-        lidar_scan_processed = np.array(self.lidar_data[:1080], dtype=np.float32)
-        if len(lidar_scan_processed) < 1080:
-             lidar_scan_processed = np.pad(lidar_scan_processed, (0, 1080 - len(lidar_scan_processed)), 'constant', constant_values=30.0)
+        # Combine with lidar scans if enabled
+        observation_components = state.copy()
+        
+        if self.include_lidar_in_obs:
+            # Ensure lidar data has 1080 points, pad if necessary (shouldn't be needed with real lidar)
+            lidar_scan_processed = np.array(self.lidar_data[:1080], dtype=np.float32)
+            if len(lidar_scan_processed) < 1080:
+                 lidar_scan_processed = np.pad(lidar_scan_processed, (0, 1080 - len(lidar_scan_processed)), 'constant', constant_values=30.0)
 
-        # Handle NaNs or Infs in lidar data (replace with max range)
-        lidar_scan_processed[np.isnan(lidar_scan_processed)] = 30.0
-        lidar_scan_processed[np.isinf(lidar_scan_processed)] = 30.0
-        lidar_scan_processed[lidar_scan_processed < 0.05] = 30.0 # Treat very close readings as max range
+            # Handle NaNs or Infs in lidar data (replace with max range)
+            lidar_scan_processed[np.isnan(lidar_scan_processed)] = 30.0
+            lidar_scan_processed[np.isinf(lidar_scan_processed)] = 30.0
+            
+            observation_components.extend(lidar_scan_processed)
 
-        observation = np.concatenate((state, lidar_scan_processed))
+        observation = np.array(observation_components, dtype=np.float32)
 
         # Normalize observation if VecNormalize is available
         original_obs = observation.copy()  # Keep a copy for debugging
@@ -362,8 +380,9 @@ class RLF1TenthController(Node):
             observation = original_obs  # Fallback to unnormalized observation
             
         # Final check for shape
-        if observation.shape != (1084,):
-            self.get_logger().error(f"Observation shape mismatch: expected (1084,), got {observation.shape}")
+        expected_shape = 4 + (1080 if self.include_lidar_in_obs else 0)
+        if observation.shape != (expected_shape,):
+            self.get_logger().error(f"Observation shape mismatch: expected ({expected_shape},), got {observation.shape}")
             return None # Don't return incorrect shape
 
         return observation
@@ -828,6 +847,8 @@ def main(args=None):
                         help='Index of the map to use')
     parser.add_argument('--map_dir', type=str, default='./f1tenth_racetracks/',
                         help='Directory containing the track maps')
+    parser.add_argument('--include_lidar_in_obs', action='store_true', default=True,
+                        help='Include lidar scans in observations')
     
     # Collision detection parameters
     parser.add_argument('--enable_collision_reset', action='store_true', default=True,
@@ -857,7 +878,8 @@ def main(args=None):
         model_path=parsed_args.model_path,
         vecnorm_path=parsed_args.vecnorm_path,
         map_index=parsed_args.map_index,
-        map_dir_=parsed_args.map_dir
+        map_dir_=parsed_args.map_dir,
+        include_lidar_in_obs=parsed_args.include_lidar_in_obs
     )
     
     # Update collision detection parameters if provided

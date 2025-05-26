@@ -47,13 +47,15 @@ class F110GymWrapper(gymnasium.Env):
                  yaw_noise_stddev=0.0,            # Noise std dev for yaw angle (radians)
                  push_0_prob=0, # Probability of pushing 0 times
                  push_2_prob=0,  # Probability of pushing 2 times
-                 include_params_in_obs=True        # Whether to include parameters in observation
+                 include_params_in_obs=True,        # Whether to include parameters in observation
+                 include_lidar_in_obs=True          # Whether to include lidar in observation
                  ):
         super().__init__()
         self.track = track # Store track object
         self.seed = seed
         self.np_random, _ = gymnasium.utils.seeding.np_random(seed)
         self.include_params_in_obs = include_params_in_obs
+        self.include_lidar_in_obs = include_lidar_in_obs
         
         # Racing mode settings
         self.racing_mode = racing_mode
@@ -113,20 +115,30 @@ class F110GymWrapper(gymnasium.Env):
         # Define the parameter vector dimensions - only include domain randomized params
         self.num_params = 12
         
-        # Update observation space: [s, ey, vel, yaw_angle] + lidar + params (if included)
+        # Calculate observation space dimensions
+        state_dim = 4  # [s, ey, vel, yaw_angle]
+        lidar_dim = 1080 if self.include_lidar_in_obs else 0
+        params_dim = self.num_params if self.include_params_in_obs else 0
+        total_obs_dim = state_dim + lidar_dim + params_dim
+        
+        # Update observation space: [s, ey, vel, yaw_angle] + lidar (optional) + params (optional)
         # low/high values are approximate, might need refinement
+        low_values = [-1000.0, -5.0, v_min, -np.pi]
+        high_values = [1000.0, 5.0, v_max, np.pi]
+        
+        if self.include_lidar_in_obs:
+            low_values.extend(np.zeros(1080))
+            high_values.extend(np.full(1080, 30.0))
+            
         if self.include_params_in_obs:
-            self.observation_space = spaces.Box(
-                low=np.concatenate(([-1000.0, -5.0, v_min, -np.pi], np.zeros(1080), np.zeros(self.num_params))),
-                high=np.concatenate(([1000.0, 5.0, v_max, np.pi], np.full(1080, 30.0), np.ones(self.num_params) * 10)),
-                shape=(1084 + self.num_params,), dtype=np.float32  # 4 state values + 1080 lidar points + env params
-            )
-        else:
-            self.observation_space = spaces.Box(
-                low=np.concatenate(([-1000.0, -5.0, v_min, -np.pi], np.zeros(1080))),
-                high=np.concatenate(([1000.0, 5.0, v_max, np.pi], np.full(1080, 30.0))),
-                shape=(1084,), dtype=np.float32  # 4 state values + 1080 lidar points
-            )
+            low_values.extend(np.zeros(self.num_params))
+            high_values.extend(np.ones(self.num_params) * 10)
+        
+        self.observation_space = spaces.Box(
+            low=np.array(low_values),
+            high=np.array(high_values),
+            shape=(total_obs_dim,), dtype=np.float32
+        )
             
         # Action space: [Steering Angle, Speed]
         self.action_space = spaces.Box(
@@ -255,11 +267,12 @@ class F110GymWrapper(gymnasium.Env):
             lidar_scan = np.clip(lidar_scan, 0, 30.0) # Assuming max range is 30
 
         # Base observation without environment parameters
-        base_obs = np.concatenate((
-            [s, ey],  # Frenet coordinates with noise
-            [vel, yaw_angle],  # Velocity and yaw angle with noise
-            lidar_scan
-        )).astype(np.float32)
+        base_obs_components = [s, ey, vel, yaw_angle]
+        
+        if self.include_lidar_in_obs:
+            base_obs_components.extend(lidar_scan)
+            
+        base_obs = np.array(base_obs_components, dtype=np.float32)
         
         # Add environment parameters to observation if enabled
         if self.include_params_in_obs:

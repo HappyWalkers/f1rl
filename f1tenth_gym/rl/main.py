@@ -29,14 +29,15 @@ from PIL import Image
 
 FLAGS = flags.FLAGS
 
+flags.DEFINE_boolean("racing_mode", False, "Enable racing mode with two cars")
 flags.DEFINE_integer("num_agents", 1, "Number of agents")
 flags.DEFINE_boolean("use_il", True, "Whether to use imitation learning before RL training")
 flags.DEFINE_enum("il_policy", "PURE_PURSUIT", ["WALL_FOLLOW", "PURE_PURSUIT", "LATTICE"], "Policy to use for imitation learning.")
 flags.DEFINE_integer("num_envs", 24, "Number of parallel environments for training")
 flags.DEFINE_boolean("use_dr", True, "Apply domain randomization during training")
 flags.DEFINE_integer("num_param_cmbs", 24, "Number of parameter combinations to use for domain randomization")
-flags.DEFINE_boolean("include_params_in_obs", True, "Include environment parameters in observations for contextual RL")
-flags.DEFINE_boolean("racing_mode", False, "Enable racing mode with two cars")
+flags.DEFINE_boolean("include_params_in_obs", False, "Include environment parameters in observations for contextual RL")
+flags.DEFINE_boolean("include_lidar_in_obs", True, "Include lidar scans in observations")
 
 flags.DEFINE_boolean("eval", False, "Run only evaluation (no training)")
 flags.DEFINE_integer("num_eval_episodes", 1, "Number of episodes to evaluate")
@@ -104,7 +105,8 @@ def main(argv):
         'num_agents': FLAGS.num_agents,
         'track': track,
         'include_params_in_obs': FLAGS.include_params_in_obs,
-        'racing_mode': FLAGS.racing_mode
+        'racing_mode': FLAGS.racing_mode,
+        'include_lidar_in_obs': FLAGS.include_lidar_in_obs
         # seed will be handled by make_vec_env/make_env
         # Other DR parameters will be added in rl.py if enabled
     }
@@ -119,7 +121,8 @@ def main(argv):
         num_param_cmbs=FLAGS.num_param_cmbs,
         use_domain_randomization=FLAGS.use_dr,
         include_params_in_obs=FLAGS.include_params_in_obs,
-        racing_mode=FLAGS.racing_mode
+        racing_mode=FLAGS.racing_mode,
+        include_lidar_in_obs=FLAGS.include_lidar_in_obs
     )
     if FLAGS.eval:
         stablebaseline3.rl.evaluate(
@@ -143,7 +146,8 @@ def main(argv):
             algorithm=FLAGS.algorithm,
             include_params_in_obs=FLAGS.include_params_in_obs,
             racing_mode=FLAGS.racing_mode,
-            feature_extractor_name=FLAGS.feature_extractor
+            feature_extractor_name=FLAGS.feature_extractor,
+            include_lidar_in_obs=FLAGS.include_lidar_in_obs
         )
 
 

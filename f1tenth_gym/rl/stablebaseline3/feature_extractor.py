@@ -114,17 +114,19 @@ class F1TenthFeaturesExtractor(BaseFeaturesExtractor):
         state_dim: int = 4,
         lidar_dim: int = 1080,
         param_dim: int = 12, 
-        include_params: bool = True
+        include_params: bool = True,
+        include_lidar: bool = True
     ):
         # Determine whether the observation includes parameters based on its dimension
         self.state_dim = state_dim  # 4 state components: [s, ey, vel, yaw_angle]
-        self.lidar_dim = lidar_dim  # LiDAR points
+        self.lidar_dim = lidar_dim if include_lidar else 0  # LiDAR points
         self.param_dim = param_dim  # Environment parameters
         self.include_params = include_params
+        self.include_lidar = include_lidar
         
         # The expected observation dimension with parameters included
-        expected_dim_with_params = state_dim + lidar_dim + param_dim
-        expected_dim_without_params = state_dim + lidar_dim
+        expected_dim_with_params = state_dim + self.lidar_dim + param_dim
+        expected_dim_without_params = state_dim + self.lidar_dim
         
         # Check if observation space has the expected shape
         obs_shape = observation_space.shape[0]
@@ -146,13 +148,18 @@ class F1TenthFeaturesExtractor(BaseFeaturesExtractor):
             nn.ReLU(),
         )
         
-        # Initial processing of LiDAR scan
-        self.lidar_initial = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(lidar_dim, lidar_initial_dim),
-            nn.LayerNorm(lidar_initial_dim),
-            nn.ReLU(),
-        )
+        # Initial processing of LiDAR scan (only if lidar is included)
+        if self.include_lidar:
+            self.lidar_initial = nn.Sequential(
+                nn.Flatten(),
+                nn.Linear(self.lidar_dim, lidar_initial_dim),
+                nn.LayerNorm(lidar_initial_dim),
+                nn.ReLU(),
+            )
+        else:
+            # No lidar processing needed
+            self.lidar_initial = None
+            lidar_initial_dim = 0  # Set to 0 for dimension calculations
         
         # Parameter conditioning network (if parameters are included)
         if include_params:
@@ -166,7 +173,8 @@ class F1TenthFeaturesExtractor(BaseFeaturesExtractor):
             
             # FiLM layers for conditioning state and lidar features
             self.state_film = FiLMLayer(state_initial_dim, 256)
-            self.lidar_film = FiLMLayer(lidar_initial_dim, 256)
+            if self.include_lidar:
+                self.lidar_film = FiLMLayer(lidar_initial_dim, 256)
         
         # Residual blocks for state processing after conditioning
         self.state_residual = nn.Sequential(
@@ -176,14 +184,19 @@ class F1TenthFeaturesExtractor(BaseFeaturesExtractor):
             )
         
         # Residual blocks for lidar processing after conditioning
-        self.lidar_residual = nn.Sequential(
-            ResidualBlock(lidar_initial_dim, 1024, 1024),
-            ResidualBlock(1024, 1024, 1024),
-            ResidualBlock(1024, 1024, 1024),
-        )
+        if self.include_lidar:
+            self.lidar_residual = nn.Sequential(
+                ResidualBlock(lidar_initial_dim, 1024, 1024),
+                ResidualBlock(1024, 1024, 1024),
+                ResidualBlock(1024, 1024, 1024),
+            )
+        else:
+            self.lidar_residual = None
         
         # Combined dimension from all branches
-        combined_dim = 1024 * 2  # state + lidar
+        combined_dim = 1024  # state
+        if self.include_lidar:
+            combined_dim += 1024  # + lidar
         
         # Final layers to combine all features with residual connections
         self.combined_net = nn.Sequential(
@@ -208,26 +221,32 @@ class F1TenthFeaturesExtractor(BaseFeaturesExtractor):
                 
         # Count linear layers before initialization
         self.state_initial.apply(count_linear_layers)
-        self.lidar_initial.apply(count_linear_layers)
+        if self.lidar_initial:
+            self.lidar_initial.apply(count_linear_layers)
         self.state_residual.apply(count_linear_layers)
-        self.lidar_residual.apply(count_linear_layers)
+        if self.include_lidar:
+            self.lidar_residual.apply(count_linear_layers)
         if include_params:
             self.param_initial.apply(count_linear_layers)
             self.state_film.apply(count_linear_layers)
-            self.lidar_film.apply(count_linear_layers)
+            if self.include_lidar:
+                self.lidar_film.apply(count_linear_layers)
         self.combined_net.apply(count_linear_layers)
         
         logging.info(f"Total Linear layers to initialize: {linear_layer_count}")
         
         # Apply initialization
         self.state_initial.apply(self._init_weights)
-        self.lidar_initial.apply(self._init_weights)
+        if self.lidar_initial:
+            self.lidar_initial.apply(self._init_weights)
         self.state_residual.apply(self._init_weights)
-        self.lidar_residual.apply(self._init_weights)
+        if self.include_lidar:
+            self.lidar_residual.apply(self._init_weights)
         if include_params:
             self.param_initial.apply(self._init_weights)
             self.state_film.apply(self._init_weights)
-            self.lidar_film.apply(self._init_weights)
+            if self.include_lidar:
+                self.lidar_film.apply(self._init_weights)
         self.combined_net.apply(self._init_weights)
         
         logging.info("Feature extractor weights initialized")
@@ -235,11 +254,13 @@ class F1TenthFeaturesExtractor(BaseFeaturesExtractor):
     def forward(self, observations: torch.Tensor) -> torch.Tensor:
         # Extract different components from observation
         state_features = observations[:, :self.state_dim]
-        lidar_features = observations[:, self.state_dim:self.state_dim + self.lidar_dim]
         
         # Initial processing
         state_output = self.state_initial(state_features)
-        lidar_output = self.lidar_initial(lidar_features)
+        
+        if self.include_lidar:
+            lidar_features = observations[:, self.state_dim:self.state_dim + self.lidar_dim]
+            lidar_output = self.lidar_initial(lidar_features)
         
         if self.include_params:
             # Extract and process environment parameters
@@ -248,14 +269,19 @@ class F1TenthFeaturesExtractor(BaseFeaturesExtractor):
             
             # Apply FiLM conditioning - parameters modulate state and lidar features
             state_output = self.state_film(state_output, param_output)
-            lidar_output = self.lidar_film(lidar_output, param_output)
+            if self.include_lidar:
+                lidar_output = self.lidar_film(lidar_output, param_output)
         
         # Apply residual blocks after conditional modulation
         state_output = self.state_residual(state_output)
-        lidar_output = self.lidar_residual(lidar_output)
         
-        # Combine modulated features
-        combined_features = torch.cat([state_output, lidar_output], dim=1)
+        if self.include_lidar:
+            lidar_output = self.lidar_residual(lidar_output)
+            # Combine modulated features
+            combined_features = torch.cat([state_output, lidar_output], dim=1)
+        else:
+            # Only state features
+            combined_features = state_output
         
         # Final processing
         output = self.combined_net(combined_features)
@@ -284,6 +310,7 @@ class MoEFeaturesExtractor(BaseFeaturesExtractor):
         lidar_dim: int = 1080,
         param_dim: int = 12,
         include_params: bool = True,
+        include_lidar: bool = True,
         num_experts: int = 24,
         state_proc_dim: int = 64,
         lidar_proc_dim: int = 256,
@@ -293,13 +320,14 @@ class MoEFeaturesExtractor(BaseFeaturesExtractor):
         super().__init__(observation_space, features_dim)
 
         self.state_dim = state_dim
-        self.lidar_dim = lidar_dim
+        self.lidar_dim = lidar_dim if include_lidar else 0
         self.param_dim = param_dim
         self.include_params = include_params
+        self.include_lidar = include_lidar
         self.num_experts = num_experts
 
         # Verify observation space shape
-        expected_dim = state_dim + lidar_dim
+        expected_dim = state_dim + self.lidar_dim
         if include_params:
             expected_dim += param_dim
         assert observation_space.shape[0] == expected_dim, \
@@ -312,15 +340,19 @@ class MoEFeaturesExtractor(BaseFeaturesExtractor):
             nn.ReLU(),
         )
 
-        # Initial processing for LiDAR scan
-        self.lidar_initial = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(lidar_dim, lidar_proc_dim),
-            nn.LayerNorm(lidar_proc_dim),
-            nn.ReLU(),
-        )
+        # Initial processing for LiDAR scan (only if lidar is included)
+        if self.include_lidar:
+            self.lidar_initial = nn.Sequential(
+                nn.Flatten(),
+                nn.Linear(self.lidar_dim, lidar_proc_dim),
+                nn.LayerNorm(lidar_proc_dim),
+                nn.ReLU(),
+            )
+            expert_input_dim = state_proc_dim + lidar_proc_dim
+        else:
+            self.lidar_initial = None
+            expert_input_dim = state_proc_dim
 
-        expert_input_dim = state_proc_dim + lidar_proc_dim
         self.experts = nn.ModuleList()
         for _ in range(num_experts):
             expert_net = nn.Sequential(
@@ -355,13 +387,16 @@ class MoEFeaturesExtractor(BaseFeaturesExtractor):
     def forward(self, observations: torch.Tensor) -> torch.Tensor:
         # Extract different components from observation
         state_features = observations[:, :self.state_dim]
-        lidar_features = observations[:, self.state_dim:self.state_dim + self.lidar_dim]
 
         # Initial processing
         state_output = self.state_initial(state_features)
-        lidar_output = self.lidar_initial(lidar_features)
         
-        expert_input = torch.cat([state_output, lidar_output], dim=1)
+        if self.include_lidar:
+            lidar_features = observations[:, self.state_dim:self.state_dim + self.lidar_dim]
+            lidar_output = self.lidar_initial(lidar_features)
+            expert_input = torch.cat([state_output, lidar_output], dim=1)
+        else:
+            expert_input = state_output
 
         expert_outputs = []
         for expert in self.experts:
@@ -409,15 +444,17 @@ class MLPFeaturesExtractor(BaseFeaturesExtractor):
         state_dim: int = 4,
         lidar_dim: int = 1080,
         param_dim: int = 12, 
-        include_params: bool = True
+        include_params: bool = True,
+        include_lidar: bool = True
     ):
         self.state_dim = state_dim
-        self.lidar_dim = lidar_dim
+        self.lidar_dim = lidar_dim if include_lidar else 0
         self.param_dim = param_dim
         self.include_params = include_params
+        self.include_lidar = include_lidar
         
         # Determine the input dimension based on whether params are included
-        input_dim = state_dim + lidar_dim
+        input_dim = state_dim + self.lidar_dim
         if include_params:
             input_dim += param_dim
             
@@ -472,15 +509,17 @@ class ResNetFeaturesExtractor(BaseFeaturesExtractor):
         state_dim: int = 4,
         lidar_dim: int = 1080,
         param_dim: int = 12, 
-        include_params: bool = True
+        include_params: bool = True,
+        include_lidar: bool = True
     ):
         self.state_dim = state_dim
-        self.lidar_dim = lidar_dim
+        self.lidar_dim = lidar_dim if include_lidar else 0
         self.param_dim = param_dim
         self.include_params = include_params
+        self.include_lidar = include_lidar
         
         # Determine the input dimension based on whether params are included
-        input_dim = state_dim + lidar_dim
+        input_dim = state_dim + self.lidar_dim
         if include_params:
             input_dim += param_dim
             
@@ -545,19 +584,21 @@ class TransformerFeaturesExtractor(BaseFeaturesExtractor):
         lidar_dim: int = 1080,
         param_dim: int = 12, 
         include_params: bool = True,
+        include_lidar: bool = True,
         num_heads: int = 4,
         num_layers: int = 3,
         dim_feedforward: int = 1024,
         embedding_dim: int = 128
     ):
         self.state_dim = state_dim
-        self.lidar_dim = lidar_dim
+        self.lidar_dim = lidar_dim if include_lidar else 0
         self.param_dim = param_dim
         self.include_params = include_params
+        self.include_lidar = include_lidar
         self.embedding_dim = embedding_dim
         
         # Determine the input dimension and sequence length
-        self.total_dim = state_dim + lidar_dim
+        self.total_dim = state_dim + self.lidar_dim
         if include_params:
             self.total_dim += param_dim
             
@@ -571,8 +612,12 @@ class TransformerFeaturesExtractor(BaseFeaturesExtractor):
         
         # For lidar, segment into multiple tokens to better capture spatial patterns
         # Break the 1080 lidar points into e.g. 9 tokens of 120 points each
-        self.lidar_tokens = 9
-        self.lidar_points_per_token = lidar_dim // self.lidar_tokens
+        if self.include_lidar:
+            self.lidar_tokens = 9
+            self.lidar_points_per_token = self.lidar_dim // self.lidar_tokens
+        else:
+            self.lidar_tokens = 0
+            self.lidar_points_per_token = 0
         
         # For state and params, use one token each
         self.num_tokens = self.lidar_tokens + 1  # lidar tokens + state token
@@ -585,10 +630,13 @@ class TransformerFeaturesExtractor(BaseFeaturesExtractor):
             nn.LayerNorm(embedding_dim)
         )
         
-        self.lidar_embedding = nn.Sequential(
-            nn.Linear(self.lidar_points_per_token, embedding_dim),
-            nn.LayerNorm(embedding_dim)
-        )
+        if self.include_lidar:
+            self.lidar_embedding = nn.Sequential(
+                nn.Linear(self.lidar_points_per_token, embedding_dim),
+                nn.LayerNorm(embedding_dim)
+            )
+        else:
+            self.lidar_embedding = None
         
         if include_params:
             self.param_embedding = nn.Sequential(
@@ -620,7 +668,8 @@ class TransformerFeaturesExtractor(BaseFeaturesExtractor):
         
         # Initialize weights
         self.state_embedding.apply(self._init_weights)
-        self.lidar_embedding.apply(self._init_weights)
+        if self.lidar_embedding:
+            self.lidar_embedding.apply(self._init_weights)
         if include_params:
             self.param_embedding.apply(self._init_weights)
         self.final.apply(self._init_weights)
@@ -635,7 +684,9 @@ class TransformerFeaturesExtractor(BaseFeaturesExtractor):
         
         # Extract different components
         state = observations[:, :self.state_dim]
-        lidar = observations[:, self.state_dim:self.state_dim + self.lidar_dim]
+        
+        if self.include_lidar:
+            lidar = observations[:, self.state_dim:self.state_dim + self.lidar_dim]
         
         if self.include_params:
             params = observations[:, self.state_dim + self.lidar_dim:]
@@ -644,14 +695,15 @@ class TransformerFeaturesExtractor(BaseFeaturesExtractor):
         state_emb = self.state_embedding(state)  # shape: [batch_size, embedding_dim]
         state_emb = state_emb.unsqueeze(1)  # shape: [batch_size, 1, embedding_dim]
         
-        # Process lidar in chunks to create multiple tokens
+        # Process lidar in chunks to create multiple tokens (only if lidar is included)
         lidar_tokens = []
-        for i in range(self.lidar_tokens):
-            start_idx = i * self.lidar_points_per_token
-            end_idx = start_idx + self.lidar_points_per_token
-            lidar_chunk = lidar[:, start_idx:end_idx]
-            lidar_emb = self.lidar_embedding(lidar_chunk)  # shape: [batch_size, embedding_dim]
-            lidar_tokens.append(lidar_emb.unsqueeze(1))  # shape: [batch_size, 1, embedding_dim]
+        if self.include_lidar:
+            for i in range(self.lidar_tokens):
+                start_idx = i * self.lidar_points_per_token
+                end_idx = start_idx + self.lidar_points_per_token
+                lidar_chunk = lidar[:, start_idx:end_idx]
+                lidar_emb = self.lidar_embedding(lidar_chunk)  # shape: [batch_size, embedding_dim]
+                lidar_tokens.append(lidar_emb.unsqueeze(1))  # shape: [batch_size, 1, embedding_dim]
         
         # Concatenate state and lidar tokens
         sequence = [state_emb] + lidar_tokens  # start with state token
