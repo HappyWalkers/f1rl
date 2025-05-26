@@ -33,11 +33,22 @@ def get_feature_extractor_class(feature_extractor_name):
         logging.warning(f"Unknown feature extractor: {feature_extractor_name}, defaulting to FILM")
         return F1TenthFeaturesExtractor
 
-def create_ppo(env, seed, include_params_in_obs=True, feature_extractor_name="FILM", include_lidar_in_obs=True):
+def create_ppo(env, seed, include_params_in_obs=True, feature_extractor_name="FILM", lidar_scan_in_obs_mode="FULL"):
     """Create a PPO model with custom neural network architecture"""
     # Determine if the environment observation includes parameters
     obs_dim = env.observation_space.shape[0]
-    lidar_dim = 1080 if include_lidar_in_obs else 0
+    
+    # Calculate lidar_dim based on mode
+    if lidar_scan_in_obs_mode == "NONE":
+        lidar_dim = 0
+    elif lidar_scan_in_obs_mode == "FULL":
+        lidar_dim = 1080
+    elif lidar_scan_in_obs_mode == "DOWNSAMPLED":
+        lidar_dim = 108
+    else:
+        raise ValueError(f"Unknown lidar_scan_in_obs_mode: {lidar_scan_in_obs_mode}")
+        
+    include_lidar = lidar_scan_in_obs_mode != "NONE"
     state_dim = 4
     param_dim = 12
     
@@ -53,7 +64,7 @@ def create_ppo(env, seed, include_params_in_obs=True, feature_extractor_name="FI
             "lidar_dim": lidar_dim,
             "param_dim": param_dim,
             "include_params": include_params_in_obs,
-            "include_lidar": include_lidar_in_obs
+            "include_lidar": include_lidar
         },
         "net_arch": [
             dict(pi=[256, 128, 64], vf=[256, 128, 64])
@@ -87,11 +98,22 @@ def create_ppo(env, seed, include_params_in_obs=True, feature_extractor_name="FI
     )
     return model
 
-def create_recurrent_ppo(env, seed, include_params_in_obs=False, feature_extractor_name="FILM", include_lidar_in_obs=True):
+def create_recurrent_ppo(env, seed, include_params_in_obs=False, feature_extractor_name="FILM", lidar_scan_in_obs_mode="FULL"):
     """Create a RecurrentPPO model with LSTM policy architecture"""
     # Determine if the environment observation includes parameters
     obs_dim = env.observation_space.shape[0]
-    lidar_dim = 1080 if include_lidar_in_obs else 0
+    
+    # Calculate lidar_dim based on mode
+    if lidar_scan_in_obs_mode == "NONE":
+        lidar_dim = 0
+    elif lidar_scan_in_obs_mode == "FULL":
+        lidar_dim = 1080
+    elif lidar_scan_in_obs_mode == "DOWNSAMPLED":
+        lidar_dim = 108
+    else:
+        raise ValueError(f"Unknown lidar_scan_in_obs_mode: {lidar_scan_in_obs_mode}")
+        
+    include_lidar = lidar_scan_in_obs_mode != "NONE"
     state_dim = 4
     param_dim = 12
     
@@ -107,7 +129,7 @@ def create_recurrent_ppo(env, seed, include_params_in_obs=False, feature_extract
             "lidar_dim": lidar_dim,
             "param_dim": param_dim,
             "include_params": include_params_in_obs,
-            "include_lidar": include_lidar_in_obs
+            "include_lidar": include_lidar
         },
         # LSTM settings
         "lstm_hidden_size": 256,
@@ -141,11 +163,22 @@ def create_recurrent_ppo(env, seed, include_params_in_obs=False, feature_extract
     )
     return model
 
-def create_ddpg(env, seed, include_params_in_obs=True, feature_extractor_name="FILM", include_lidar_in_obs=True):
+def create_ddpg(env, seed, include_params_in_obs=True, feature_extractor_name="FILM", lidar_scan_in_obs_mode="FULL"):
     """Create a DDPG model with custom neural network architecture"""
     # Determine if the environment observation includes parameters
     obs_dim = env.observation_space.shape[0]
-    lidar_dim = 1080 if include_lidar_in_obs else 0
+    
+    # Calculate lidar_dim based on mode
+    if lidar_scan_in_obs_mode == "NONE":
+        lidar_dim = 0
+    elif lidar_scan_in_obs_mode == "FULL":
+        lidar_dim = 1080
+    elif lidar_scan_in_obs_mode == "DOWNSAMPLED":
+        lidar_dim = 108
+    else:
+        raise ValueError(f"Unknown lidar_scan_in_obs_mode: {lidar_scan_in_obs_mode}")
+        
+    include_lidar = lidar_scan_in_obs_mode != "NONE"
     state_dim = 4
     param_dim = 12
     
@@ -161,7 +194,7 @@ def create_ddpg(env, seed, include_params_in_obs=True, feature_extractor_name="F
             "lidar_dim": lidar_dim,
             "param_dim": param_dim,
             "include_params": include_params_in_obs,
-            "include_lidar": include_lidar_in_obs
+            "include_lidar": include_lidar
         },
         "net_arch": [400, 300]
     }
@@ -181,11 +214,22 @@ def create_ddpg(env, seed, include_params_in_obs=True, feature_extractor_name="F
     )
     return model
 
-def create_td3(env, seed, include_params_in_obs=True, feature_extractor_name="FILM", include_lidar_in_obs=True):
+def create_td3(env, seed, include_params_in_obs=True, feature_extractor_name="FILM", lidar_scan_in_obs_mode="FULL"):
     """Create a TD3 model with custom neural network architecture"""
     # Determine if the environment observation includes parameters
     obs_dim = env.observation_space.shape[0]
-    lidar_dim = 1080 if include_lidar_in_obs else 0
+    
+    # Calculate lidar_dim based on mode
+    if lidar_scan_in_obs_mode == "NONE":
+        lidar_dim = 0
+    elif lidar_scan_in_obs_mode == "FULL":
+        lidar_dim = 1080
+    elif lidar_scan_in_obs_mode == "DOWNSAMPLED":
+        lidar_dim = 108
+    else:
+        raise ValueError(f"Unknown lidar_scan_in_obs_mode: {lidar_scan_in_obs_mode}")
+        
+    include_lidar = lidar_scan_in_obs_mode != "NONE"
     state_dim = 4
     param_dim = 12
     
@@ -201,7 +245,7 @@ def create_td3(env, seed, include_params_in_obs=True, feature_extractor_name="FI
             "lidar_dim": lidar_dim,
             "param_dim": param_dim,
             "include_params": include_params_in_obs,
-            "include_lidar": include_lidar_in_obs
+            "include_lidar": include_lidar
         },
         "net_arch": [400, 300]
     }
@@ -221,20 +265,34 @@ def create_td3(env, seed, include_params_in_obs=True, feature_extractor_name="FI
     )
     return model
 
-def create_sac(env, seed, include_params_in_obs=True, feature_extractor_name="FILM", include_lidar_in_obs=True):
+def create_sac(env, seed, include_params_in_obs=True, feature_extractor_name="FILM", lidar_scan_in_obs_mode="FULL"):
     """Create a SAC model with custom neural network architecture"""
     # Get the appropriate feature extractor class
     features_extractor_class = get_feature_extractor_class(feature_extractor_name)
+    
+    # Calculate lidar_dim based on mode
+    if lidar_scan_in_obs_mode == "NONE":
+        lidar_dim = 0
+    elif lidar_scan_in_obs_mode == "FULL":
+        lidar_dim = 1080
+    elif lidar_scan_in_obs_mode == "DOWNSAMPLED":
+        lidar_dim = 108
+    else:
+        raise ValueError(f"Unknown lidar_scan_in_obs_mode: {lidar_scan_in_obs_mode}")
+        
+    include_lidar = lidar_scan_in_obs_mode != "NONE"
+    state_dim = 4
+    param_dim = 12
     
     policy_kwargs = {
         "features_extractor_class": features_extractor_class,
         "features_extractor_kwargs": {
             "features_dim": 1024,
-            "state_dim": 4,
-            "lidar_dim": 1080 if include_lidar_in_obs else 0,
-            "param_dim": 12,
+            "state_dim": state_dim,
+            "lidar_dim": lidar_dim,
+            "param_dim": param_dim,
             "include_params": include_params_in_obs,
-            "include_lidar": include_lidar_in_obs
+            "include_lidar": include_lidar
         },
         "net_arch": [1024, 1024, 512, 512, 256, 256, 128, 128, 64, 64]
     }
@@ -1306,7 +1364,7 @@ def make_env(env_id, rank, seed=0, env_kwargs=None):
     # set_global_seeds(seed) # Deprecated in SB3
     return _init
 
-def create_vec_env(env_kwargs, seed, num_envs=1, num_param_cmbs=None, use_domain_randomization=False, include_params_in_obs=True, racing_mode=False, normalize_obs=True, normalize_reward=True, include_lidar_in_obs=True):
+def create_vec_env(env_kwargs, seed, num_envs=1, num_param_cmbs=None, use_domain_randomization=False, include_params_in_obs=True, racing_mode=False, normalize_obs=True, normalize_reward=True, lidar_scan_in_obs_mode="FULL"):
     """
     Creates vectorized environments for training and evaluation.
 
@@ -1321,7 +1379,7 @@ def create_vec_env(env_kwargs, seed, num_envs=1, num_param_cmbs=None, use_domain
         racing_mode (bool): Whether to use racing mode with two cars.
         normalize_obs (bool): Whether to normalize observations.
         normalize_reward (bool): Whether to normalize rewards.
-        include_lidar_in_obs (bool): Whether to include lidar in observations.
+        lidar_scan_in_obs_mode (str): Mode for lidar scan in observations.
 
     Returns:
         VecEnv: The vectorized environment, optionally wrapped with VecNormalize.
@@ -1369,7 +1427,7 @@ def create_vec_env(env_kwargs, seed, num_envs=1, num_param_cmbs=None, use_domain
         rank_seed = seed + i
         current_env_kwargs = env_kwargs.copy()
         current_env_kwargs['include_params_in_obs'] = include_params_in_obs
-        current_env_kwargs['include_lidar_in_obs'] = include_lidar_in_obs
+        current_env_kwargs['lidar_scan_in_obs_mode'] = lidar_scan_in_obs_mode
         
         # Ensure racing_mode is passed to environment
         if 'racing_mode' not in current_env_kwargs:
@@ -1413,7 +1471,7 @@ def create_vec_env(env_kwargs, seed, num_envs=1, num_param_cmbs=None, use_domain
     return vec_env
 
 # Updated train function to handle VecEnv and Domain Randomization
-def train(env, seed, num_envs=1, num_param_cmbs=None, use_domain_randomization=False, use_imitation_learning=True, imitation_policy_type="PURE_PURSUIT", algorithm="SAC", include_params_in_obs=True, racing_mode=False, normalize_obs=True, normalize_reward=True, feature_extractor_name="FILM", include_lidar_in_obs=True):
+def train(env, seed, num_envs=1, num_param_cmbs=None, use_domain_randomization=False, use_imitation_learning=True, imitation_policy_type="PURE_PURSUIT", algorithm="SAC", include_params_in_obs=True, racing_mode=False, normalize_obs=True, normalize_reward=True, feature_extractor_name="FILM", lidar_scan_in_obs_mode="FULL"):
     """
     Trains the RL model.
 
@@ -1432,20 +1490,20 @@ def train(env, seed, num_envs=1, num_param_cmbs=None, use_domain_randomization=F
         normalize_obs (bool): Whether to normalize observations.
         normalize_reward (bool): Whether to normalize rewards.
         feature_extractor_name (str): Name of feature extractor architecture to use.
-        include_lidar_in_obs (bool): Whether to include lidar scans in observations.
+        lidar_scan_in_obs_mode (str): Mode for lidar scan in observations.
     """
     # --- Create Model ---
     logging.info(f"Creating {algorithm} model with {feature_extractor_name} feature extractor")
     if algorithm == "PPO":
-        model = create_ppo(env, seed, include_params_in_obs, feature_extractor_name, include_lidar_in_obs)
+        model = create_ppo(env, seed, include_params_in_obs, feature_extractor_name, lidar_scan_in_obs_mode)
     elif algorithm == "RECURRENT_PPO":
-        model = create_recurrent_ppo(env, seed, include_params_in_obs, feature_extractor_name, include_lidar_in_obs)
+        model = create_recurrent_ppo(env, seed, include_params_in_obs, feature_extractor_name, lidar_scan_in_obs_mode)
     elif algorithm == "DDPG":
-        model = create_ddpg(env, seed, include_params_in_obs, feature_extractor_name, include_lidar_in_obs)
+        model = create_ddpg(env, seed, include_params_in_obs, feature_extractor_name, lidar_scan_in_obs_mode)
     elif algorithm == "TD3":
-        model = create_td3(env, seed, include_params_in_obs, feature_extractor_name, include_lidar_in_obs)
+        model = create_td3(env, seed, include_params_in_obs, feature_extractor_name, lidar_scan_in_obs_mode)
     elif algorithm == "SAC":
-        model = create_sac(env, seed, include_params_in_obs, feature_extractor_name, include_lidar_in_obs)
+        model = create_sac(env, seed, include_params_in_obs, feature_extractor_name, lidar_scan_in_obs_mode)
     else:
         raise ValueError(f"Unsupported algorithm: {algorithm}")
 

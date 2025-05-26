@@ -48,14 +48,25 @@ class F110GymWrapper(gymnasium.Env):
                  push_0_prob=0, # Probability of pushing 0 times
                  push_2_prob=0,  # Probability of pushing 2 times
                  include_params_in_obs=True,        # Whether to include parameters in observation
-                 include_lidar_in_obs=True          # Whether to include lidar in observation
+                 lidar_scan_in_obs_mode="FULL"     # Lidar mode: NONE, FULL, or DOWNSAMPLED
                  ):
         super().__init__()
         self.track = track # Store track object
         self.seed = seed
         self.np_random, _ = gymnasium.utils.seeding.np_random(seed)
         self.include_params_in_obs = include_params_in_obs
-        self.include_lidar_in_obs = include_lidar_in_obs
+        self.include_lidar_in_obs = lidar_scan_in_obs_mode != "NONE"
+        self.lidar_scan_in_obs_mode = lidar_scan_in_obs_mode
+        
+        # Set lidar dimensions based on mode
+        if lidar_scan_in_obs_mode == "NONE":
+            self.lidar_dim = 0
+        elif lidar_scan_in_obs_mode == "FULL":
+            self.lidar_dim = 1080
+        elif lidar_scan_in_obs_mode == "DOWNSAMPLED":
+            self.lidar_dim = 108  # 1080 / 10
+        else:
+            raise ValueError(f"Unknown lidar_scan_in_obs_mode: {lidar_scan_in_obs_mode}")
         
         # Racing mode settings
         self.racing_mode = racing_mode
@@ -117,7 +128,7 @@ class F110GymWrapper(gymnasium.Env):
         
         # Calculate observation space dimensions
         state_dim = 4  # [s, ey, vel, yaw_angle]
-        lidar_dim = 1080 if self.include_lidar_in_obs else 0
+        lidar_dim = self.lidar_dim if self.include_lidar_in_obs else 0
         params_dim = self.num_params if self.include_params_in_obs else 0
         total_obs_dim = state_dim + lidar_dim + params_dim
         
@@ -127,8 +138,8 @@ class F110GymWrapper(gymnasium.Env):
         high_values = [1000.0, 5.0, v_max, np.pi]
         
         if self.include_lidar_in_obs:
-            low_values.extend(np.zeros(1080))
-            high_values.extend(np.full(1080, 30.0))
+            low_values.extend(np.zeros(self.lidar_dim))
+            high_values.extend(np.full(self.lidar_dim, 30.0))
             
         if self.include_params_in_obs:
             low_values.extend(np.zeros(self.num_params))
@@ -205,6 +216,26 @@ class F110GymWrapper(gymnasium.Env):
         })
         return params
 
+    def _process_lidar_scan(self, lidar_scan):
+        """
+        Process lidar scan based on the observation mode.
+        
+        Args:
+            lidar_scan: Raw lidar scan (1080 points)
+            
+        Returns:
+            Processed lidar scan based on mode
+        """
+        if self.lidar_scan_in_obs_mode == "NONE":
+            return np.array([])
+        elif self.lidar_scan_in_obs_mode == "FULL":
+            return lidar_scan
+        elif self.lidar_scan_in_obs_mode == "DOWNSAMPLED":
+            # Pick every 10th point (1080 / 10 = 108 points)
+            return lidar_scan[::10]
+        else:
+            raise ValueError(f"Unknown lidar_scan_in_obs_mode: {self.lidar_scan_in_obs_mode}")
+
     def _process_observation(self, obs, agent_idx=None):
         """
         Processes the raw observation dict and applies noise.
@@ -266,11 +297,14 @@ class F110GymWrapper(gymnasium.Env):
             # Clip values to valid range
             lidar_scan = np.clip(lidar_scan, 0, 30.0) # Assuming max range is 30
 
+        # Process lidar scan based on mode (downsample if needed)
+        processed_lidar = self._process_lidar_scan(lidar_scan)
+
         # Base observation without environment parameters
         base_obs_components = [s, ey, vel, yaw_angle]
         
         if self.include_lidar_in_obs:
-            base_obs_components.extend(lidar_scan)
+            base_obs_components.extend(processed_lidar)
             
         base_obs = np.array(base_obs_components, dtype=np.float32)
         

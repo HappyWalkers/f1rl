@@ -37,7 +37,7 @@ flags.DEFINE_integer("num_envs", 24, "Number of parallel environments for traini
 flags.DEFINE_boolean("use_dr", True, "Apply domain randomization during training")
 flags.DEFINE_integer("num_param_cmbs", 24, "Number of parameter combinations to use for domain randomization")
 flags.DEFINE_boolean("include_params_in_obs", False, "Include environment parameters in observations for contextual RL")
-flags.DEFINE_boolean("include_lidar_in_obs", True, "Include lidar scans in observations")
+flags.DEFINE_enum("lidar_scan_in_obs_mode", "DOWNSAMPLED", ["NONE", "FULL", "DOWNSAMPLED"], "Lidar scan mode in observations: NONE (no lidar), FULL (1080 points), DOWNSAMPLED (108 points - 1 in 10)")
 
 flags.DEFINE_boolean("eval", False, "Run only evaluation (no training)")
 flags.DEFINE_integer("num_eval_episodes", 1, "Number of episodes to evaluate")
@@ -106,7 +106,7 @@ def main(argv):
         'track': track,
         'include_params_in_obs': FLAGS.include_params_in_obs,
         'racing_mode': FLAGS.racing_mode,
-        'include_lidar_in_obs': FLAGS.include_lidar_in_obs
+        'lidar_scan_in_obs_mode': FLAGS.lidar_scan_in_obs_mode
         # seed will be handled by make_vec_env/make_env
         # Other DR parameters will be added in rl.py if enabled
     }
@@ -122,7 +122,7 @@ def main(argv):
         use_domain_randomization=FLAGS.use_dr,
         include_params_in_obs=FLAGS.include_params_in_obs,
         racing_mode=FLAGS.racing_mode,
-        include_lidar_in_obs=FLAGS.include_lidar_in_obs
+        lidar_scan_in_obs_mode=FLAGS.lidar_scan_in_obs_mode
     )
     if FLAGS.eval:
         stablebaseline3.rl.evaluate(
@@ -147,7 +147,7 @@ def main(argv):
             include_params_in_obs=FLAGS.include_params_in_obs,
             racing_mode=FLAGS.racing_mode,
             feature_extractor_name=FLAGS.feature_extractor,
-            include_lidar_in_obs=FLAGS.include_lidar_in_obs
+            lidar_scan_in_obs_mode=FLAGS.lidar_scan_in_obs_mode
         )
 
 
