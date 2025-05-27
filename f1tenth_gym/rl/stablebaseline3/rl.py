@@ -408,12 +408,13 @@ def run_evaluation_episode(eval_env, model, env_idx, is_vec_env, is_recurrent):
     
     episode_positions = []
     episode_velocities = []
+    episode_desired_velocities = []  # New: collect desired velocities from model actions
     
     while not (terminated or truncated):
-        if is_vec_env:
-            eval_env.env_method('render', indices=[env_idx])
-        else:
-            eval_env.render()
+        # if is_vec_env:
+        #     eval_env.env_method('render', indices=[env_idx])
+        # else:
+        #     eval_env.render()
         
         single_obs = obs[0] if isinstance(obs, np.ndarray) and obs.ndim > 1 else obs
         
@@ -427,6 +428,17 @@ def run_evaluation_episode(eval_env, model, env_idx, is_vec_env, is_recurrent):
         else:
             action, _states = model.predict(single_obs, deterministic=True)
         
+        # Extract desired velocity from model action (action[1] is desired speed)
+        # Handle different action formats from different policies
+        if hasattr(action, '__len__') and len(action) > 1:
+            desired_velocity = float(action[1])
+        elif hasattr(action, '__len__') and len(action) == 1:
+            # Some policies might only output steering, use observed velocity
+            desired_velocity = float(single_obs[2]) if len(single_obs) > 2 else 0.0
+        else:
+            # Fallback for other action formats
+            desired_velocity = 0.0
+        
         if is_vec_env:
             obs, reward, terminated, truncated, info = eval_env.env_method(
                 'step', action, indices=[env_idx]
@@ -436,6 +448,7 @@ def run_evaluation_episode(eval_env, model, env_idx, is_vec_env, is_recurrent):
             if position is not None and velocity is not None:
                 episode_positions.append(position)
                 episode_velocities.append(velocity)
+                episode_desired_velocities.append(desired_velocity)
             
             obs = np.array([obs])
             if isinstance(eval_env, VecNormalize):
@@ -449,6 +462,7 @@ def run_evaluation_episode(eval_env, model, env_idx, is_vec_env, is_recurrent):
             if position is not None and velocity is not None:
                 episode_positions.append(position)
                 episode_velocities.append(velocity)
+                episode_desired_velocities.append(desired_velocity)
         
         if is_recurrent:
             episode_starts = np.zeros((1,), dtype=bool)
@@ -457,7 +471,7 @@ def run_evaluation_episode(eval_env, model, env_idx, is_vec_env, is_recurrent):
         step_count += 1
     
     episode_time = time.time() - episode_start_time
-    return total_reward, step_count, episode_time, episode_positions, episode_velocities
+    return total_reward, step_count, episode_time, episode_positions, episode_velocities, episode_desired_velocities
 
 def extract_position_velocity(obs, env, agent_idx=0, info=None):
     """Extracts position and velocity data from observation and info."""
@@ -913,8 +927,8 @@ def plot_acceleration_profiles(env_positions, env_velocities, env_params, num_en
     plt.close('all')
     logging.info(f"2D acceleration profile plots saved to {plot_dir}")
 
-def plot_velocity_time_profiles(env_velocities, env_episode_lengths, env_params, num_envs, num_episodes, model_path=None, algorithm="SAC"):
-    """Creates and saves velocity vs time profile plots with acceleration on right axis."""
+def plot_velocity_time_profiles(env_velocities, env_desired_velocities, env_episode_lengths, env_params, num_envs, num_episodes, model_path=None, algorithm="SAC"):
+    """Creates and saves velocity vs time profile plots with both observed and desired velocities, plus acceleration on right axis."""
     # Create output directory
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     plot_dir = f"./velocity_time_profiles_{timestamp}"
@@ -933,7 +947,7 @@ def plot_velocity_time_profiles(env_velocities, env_episode_lengths, env_params,
     fig, ax1 = plt.subplots(figsize=(15, 10))
     ax2 = ax1.twinx()  # Create right axis for acceleration
     
-    plt.title(f"Velocity and Acceleration vs Time Profiles Overview - {algorithm} Algorithm")
+    plt.title(f"Observed/Desired Velocity and Acceleration vs Time Profiles Overview - {algorithm} Algorithm")
     ax1.set_xlabel('Time (s)')
     ax1.set_ylabel('Velocity (m/s)', color='blue')
     ax2.set_ylabel('Acceleration (m/s²) [log scale]', color='red')
@@ -948,15 +962,14 @@ def plot_velocity_time_profiles(env_velocities, env_episode_lengths, env_params,
         if len(env_velocities[env_idx]) == 0:
             continue
         
-        velocities = np.array(env_velocities[env_idx])
-        time_points = np.arange(len(velocities)) * dt
+        observed_velocities = np.array(env_velocities[env_idx])
+        desired_velocities = np.array(env_desired_velocities[env_idx])
+        time_points = np.arange(len(observed_velocities)) * dt
         
-        # Calculate acceleration
-        accelerations = np.zeros_like(velocities)
-        if len(velocities) > 1:
-            accelerations[1:] = np.diff(velocities) / dt
-            # # Clip extreme values for better visualization
-            # accelerations = np.clip(accelerations, -10, 10)
+        # Calculate acceleration from observed velocities
+        accelerations = np.zeros_like(observed_velocities)
+        if len(observed_velocities) > 1:
+            accelerations[1:] = np.diff(observed_velocities) / dt
         
         # Individual environment plot
         fig_ind, ax1_ind = plt.subplots(figsize=(12, 8))
@@ -972,13 +985,14 @@ def plot_velocity_time_profiles(env_velocities, env_episode_lengths, env_params,
             if param_info:
                 param_string = ", ".join(param_info)
         
-        plot_title = f"Velocity and Acceleration vs Time - Env {env_idx+1}/{num_envs}"
+        plot_title = f"Observed/Desired Velocity and Acceleration vs Time - Env {env_idx+1}/{num_envs}"
         if param_string:
             plot_title += f" ({param_string})"
         
-        # Plot velocity and acceleration
-        line1 = ax1_ind.plot(time_points, velocities, 'b-', linewidth=1.5, alpha=0.8, label='Velocity')
-        line2 = ax2_ind.plot(time_points, accelerations, 'r-', linewidth=1.5, alpha=0.8, label='Acceleration')
+        # Plot observed velocity, desired velocity, and acceleration
+        line1 = ax1_ind.plot(time_points, observed_velocities, 'b-', linewidth=1.5, alpha=0.8, label='Observed Velocity')
+        line2 = ax1_ind.plot(time_points, desired_velocities, 'g-', linewidth=1.5, alpha=0.8, label='Desired Velocity')
+        line3 = ax2_ind.plot(time_points, accelerations, 'r-', linewidth=1.5, alpha=0.5, label='Acceleration')
         
         # Set log scale for acceleration axis (symmetric log to handle negative values)
         ax2_ind.set_yscale('symlog', linthresh=10)
@@ -1004,27 +1018,42 @@ def plot_velocity_time_profiles(env_velocities, env_episode_lengths, env_params,
         ax2_ind.tick_params(axis='y', labelcolor='red')
         
         # Add combined legend
-        lines = line1 + line2
+        lines = line1 + line2 + line3
         labels = [l.get_label() for l in lines]
         ax1_ind.legend(lines, labels, loc='upper right')
         
         # Add statistics text
-        if len(velocities) > 0 and len(accelerations) > 0:
-            mean_vel = np.mean(velocities)
-            max_vel = np.max(velocities)
-            min_vel = np.min(velocities)
-            std_vel = np.std(velocities)
+        if len(observed_velocities) > 0 and len(desired_velocities) > 0 and len(accelerations) > 0:
+            mean_obs_vel = np.mean(observed_velocities)
+            max_obs_vel = np.max(observed_velocities)
+            min_obs_vel = np.min(observed_velocities)
+            std_obs_vel = np.std(observed_velocities)
+            
+            mean_des_vel = np.mean(desired_velocities)
+            max_des_vel = np.max(desired_velocities)
+            min_des_vel = np.min(desired_velocities)
+            std_des_vel = np.std(desired_velocities)
             
             mean_acc = np.mean(accelerations)
             max_acc = np.max(accelerations)
             min_acc = np.min(accelerations)
             std_acc = np.std(accelerations)
             
-            stats_text = (f'Velocity:\n'
-                         f'  Mean: {mean_vel:.2f} m/s\n'
-                         f'  Max: {max_vel:.2f} m/s\n'
-                         f'  Min: {min_vel:.2f} m/s\n'
-                         f'  Std: {std_vel:.2f} m/s\n\n'
+            # Calculate velocity tracking error
+            vel_error = np.mean(np.abs(observed_velocities - desired_velocities))
+            
+            stats_text = (f'Observed Velocity:\n'
+                         f'  Mean: {mean_obs_vel:.2f} m/s\n'
+                         f'  Max: {max_obs_vel:.2f} m/s\n'
+                         f'  Min: {min_obs_vel:.2f} m/s\n'
+                         f'  Std: {std_obs_vel:.2f} m/s\n\n'
+                         f'Desired Velocity:\n'
+                         f'  Mean: {mean_des_vel:.2f} m/s\n'
+                         f'  Max: {max_des_vel:.2f} m/s\n'
+                         f'  Min: {min_des_vel:.2f} m/s\n'
+                         f'  Std: {std_des_vel:.2f} m/s\n\n'
+                         f'Velocity Tracking:\n'
+                         f'  MAE: {vel_error:.2f} m/s\n\n'
                          f'Acceleration:\n'
                          f'  Mean: {mean_acc:.2f} m/s²\n'
                          f'  Max: {max_acc:.2f} m/s²\n'
@@ -1032,14 +1061,15 @@ def plot_velocity_time_profiles(env_velocities, env_episode_lengths, env_params,
                          f'  Std: {std_acc:.2f} m/s²')
             ax1_ind.text(0.02, 0.98, stats_text, transform=ax1_ind.transAxes, 
                         verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
-                        fontsize=9)
+                        fontsize=8)
         
         env_plot_filename = os.path.join(plot_dir, f"velocity_acceleration_time_env_{env_idx+1}.png")
         plt.savefig(env_plot_filename, dpi=300, bbox_inches='tight')
         plt.close(fig_ind)
         
         # Add to overview plot
-        ax1.plot(time_points, velocities, color=env_colors[env_idx], linewidth=1.5, alpha=0.7, linestyle='-')
+        ax1.plot(time_points, observed_velocities, color=env_colors[env_idx], linewidth=1.5, alpha=0.7, linestyle='-')
+        ax1.plot(time_points, desired_velocities, color=env_colors[env_idx], linewidth=1.5, alpha=0.7, linestyle=':')
         ax2.plot(time_points, accelerations, color=env_colors[env_idx], linewidth=1.5, alpha=0.7, linestyle='--')
         
         legend_label = f"Env {env_idx+1}"
@@ -1059,7 +1089,8 @@ def plot_velocity_time_profiles(env_velocities, env_episode_lengths, env_params,
         # Add custom legend explaining the line styles
         from matplotlib.lines import Line2D
         legend_elements = [
-            Line2D([0], [0], color='blue', lw=2, label='Velocity (solid line)'),
+            Line2D([0], [0], color='blue', lw=2, label='Observed Velocity (solid line)'),
+            Line2D([0], [0], color='green', lw=2, linestyle=':', label='Desired Velocity (dotted line)'),
             Line2D([0], [0], color='red', lw=2, linestyle='--', label='Acceleration (dashed line)')
         ]
         legend_elements.extend(legend_patches)
@@ -1106,6 +1137,7 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
     env_lap_times = [[] for _ in range(num_envs)]
     env_positions = [[] for _ in range(num_envs)]
     env_velocities = [[] for _ in range(num_envs)]
+    env_desired_velocities = [[] for _ in range(num_envs)]  # New: store desired velocities
     env_params = [None for _ in range(num_envs)]
     
     is_recurrent = algorithm == "RECURRENT_PPO" or (hasattr(model, 'policy') and hasattr(model.policy, '_initial_state'))
@@ -1118,7 +1150,7 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
             logging.info(f"Starting evaluation episode {episode+1}/{num_episodes} on env {env_idx+1}")
             
             # Run a single evaluation episode
-            total_reward, step_count, episode_time, episode_positions, episode_velocities = run_evaluation_episode(
+            total_reward, step_count, episode_time, episode_positions, episode_velocities, episode_desired_velocities = run_evaluation_episode(
                 eval_env, model, env_idx, is_vec_env, is_recurrent
             )
             
@@ -1131,6 +1163,7 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
             if episode_positions and episode_velocities:
                 env_positions[env_idx].extend(episode_positions)
                 env_velocities[env_idx].extend(episode_velocities)
+                env_desired_velocities[env_idx].extend(episode_desired_velocities)
             
             logging.info(f"Episode {episode+1} finished:")
             logging.info(f"  Reward: {total_reward:.2f}")
@@ -1151,9 +1184,9 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
         except Exception as e:
             logging.error(f"Error generating acceleration profile plots: {e}")
         
-        # Plot velocity vs time profiles
+        # Plot velocity vs time profiles (now with both observed and desired velocities)
         try:
-            plot_velocity_time_profiles(env_velocities, env_episode_lengths, env_params, num_envs, num_episodes, model_path, algorithm)
+            plot_velocity_time_profiles(env_velocities, env_desired_velocities, env_episode_lengths, env_params, num_envs, num_episodes, model_path, algorithm)
         except Exception as e:
             logging.error(f"Error generating velocity vs time profile plots: {e}")
     
