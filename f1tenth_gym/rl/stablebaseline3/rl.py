@@ -15,6 +15,10 @@ from tqdm import tqdm
 from rl_env import F110GymWrapper # Import the wrapper
 from stablebaseline3.feature_extractor import F1TenthFeaturesExtractor, MLPFeaturesExtractor, ResNetFeaturesExtractor, TransformerFeaturesExtractor, MoEFeaturesExtractor
 from sortedcontainers import SortedList
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+from matplotlib import cm
+
 
 # Function to select feature extractor based on name
 def get_feature_extractor_class(feature_extractor_name):
@@ -663,14 +667,6 @@ def compute_statistics(env_episode_rewards, env_episode_lengths, env_lap_times, 
 
 def plot_velocity_profiles(env_positions, env_velocities, env_params, num_envs, track=None, model_path=None, algorithm="SAC"):
     """Creates and saves velocity profile plots."""
-    try:
-        import matplotlib.pyplot as plt
-        from matplotlib import cm
-        import matplotlib.patches as mpatches
-    except ImportError:
-        logging.error("Matplotlib is not available. Skipping velocity profile plots.")
-        return
-    
     # Create output directory
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     plot_dir = f"./velocity_profiles_{timestamp}"
@@ -792,14 +788,6 @@ def plot_velocity_profiles(env_positions, env_velocities, env_params, num_envs, 
 
 def plot_acceleration_profiles(env_positions, env_velocities, env_params, num_envs, track=None, model_path=None, algorithm="SAC"):
     """Creates and saves 2D acceleration profile plots with color-coded acceleration values."""
-    try:
-        import matplotlib.pyplot as plt
-        from matplotlib import cm
-        import matplotlib.patches as mpatches
-    except ImportError:
-        logging.error("Matplotlib is not available. Skipping acceleration profile plots.")
-        return
-    
     # Create output directory
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     plot_dir = f"./acceleration_profiles_{timestamp}"
@@ -952,6 +940,170 @@ def plot_acceleration_profiles(env_positions, env_velocities, env_params, num_en
     plt.close('all')
     logging.info(f"2D acceleration profile plots saved to {plot_dir}")
 
+def plot_velocity_time_profiles(env_velocities, env_episode_lengths, env_params, num_envs, num_episodes, model_path=None, algorithm="SAC"):
+    """Creates and saves velocity vs time profile plots with acceleration on right axis."""
+    # Create output directory
+    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    plot_dir = f"./velocity_time_profiles_{timestamp}"
+    
+    if model_path is not None:
+        try:
+            output_dir = os.path.dirname(model_path) or "."
+            os.makedirs(output_dir, exist_ok=True)
+            plot_dir = os.path.join(output_dir, f"velocity_time_profiles_{timestamp}")
+        except:
+            pass
+    
+    try:
+        os.makedirs(plot_dir, exist_ok=True)
+    except:
+        plot_dir = "."
+    
+    # Simulation time step (assuming 50Hz update rate)
+    dt = 0.02
+    
+    # Overview plot
+    fig, ax1 = plt.subplots(figsize=(15, 10))
+    ax2 = ax1.twinx()  # Create right axis for acceleration
+    
+    plt.title(f"Velocity and Acceleration vs Time Profiles Overview - {algorithm} Algorithm")
+    ax1.set_xlabel('Time (s)')
+    ax1.set_ylabel('Velocity (m/s)', color='blue')
+    ax2.set_ylabel('Acceleration (m/s²) [log scale]', color='red')
+    
+    # Set log scale for acceleration axis in overview plot
+    ax2.set_yscale('symlog', linthresh=10)
+    
+    env_colors = plt.cm.tab10(np.linspace(0, 1, num_envs))
+    legend_patches = []
+    
+    for env_idx in range(num_envs):
+        if len(env_velocities[env_idx]) == 0:
+            continue
+        
+        velocities = np.array(env_velocities[env_idx])
+        time_points = np.arange(len(velocities)) * dt
+        
+        # Calculate acceleration
+        accelerations = np.zeros_like(velocities)
+        if len(velocities) > 1:
+            accelerations[1:] = np.diff(velocities) / dt
+            # # Clip extreme values for better visualization
+            # accelerations = np.clip(accelerations, -10, 10)
+        
+        # Individual environment plot
+        fig_ind, ax1_ind = plt.subplots(figsize=(12, 8))
+        ax2_ind = ax1_ind.twinx()
+        
+        # Format parameter string
+        param_string = ""
+        if env_params[env_idx] is not None:
+            param_info = []
+            for key, value in env_params[env_idx].items():
+                if key in ["mu", "C_Sf", "C_Sr", "m", "I", "lidar_noise_stddev"]:
+                    param_info.append(f"{key}={value:.3f}")
+            if param_info:
+                param_string = ", ".join(param_info)
+        
+        plot_title = f"Velocity and Acceleration vs Time - Env {env_idx+1}/{num_envs}"
+        if param_string:
+            plot_title += f" ({param_string})"
+        
+        # Plot velocity and acceleration
+        line1 = ax1_ind.plot(time_points, velocities, 'b-', linewidth=1.5, alpha=0.8, label='Velocity')
+        line2 = ax2_ind.plot(time_points, accelerations, 'r-', linewidth=1.5, alpha=0.8, label='Acceleration')
+        
+        # Set log scale for acceleration axis (symmetric log to handle negative values)
+        ax2_ind.set_yscale('symlog', linthresh=10)
+        
+        # Add episode boundaries if we have episode length data
+        if env_idx < len(env_episode_lengths) and len(env_episode_lengths[env_idx]) > 0:
+            episode_lengths = env_episode_lengths[env_idx]
+            current_time = 0
+            for episode_num, episode_length in enumerate(episode_lengths):
+                episode_end_time = current_time + episode_length * dt
+                if episode_num < len(episode_lengths) - 1:  # Don't draw line after last episode
+                    ax1_ind.axvline(x=episode_end_time, color='gray', linestyle='--', alpha=0.6, linewidth=1)
+                current_time = episode_end_time
+        
+        ax1_ind.set_xlabel('Time (s)')
+        ax1_ind.set_ylabel('Velocity (m/s)', color='blue')
+        ax2_ind.set_ylabel('Acceleration (m/s²) [log scale]', color='red')
+        ax1_ind.set_title(plot_title)
+        ax1_ind.grid(True, alpha=0.3)
+        
+        # Color the y-axis labels
+        ax1_ind.tick_params(axis='y', labelcolor='blue')
+        ax2_ind.tick_params(axis='y', labelcolor='red')
+        
+        # Add combined legend
+        lines = line1 + line2
+        labels = [l.get_label() for l in lines]
+        ax1_ind.legend(lines, labels, loc='upper right')
+        
+        # Add statistics text
+        if len(velocities) > 0 and len(accelerations) > 0:
+            mean_vel = np.mean(velocities)
+            max_vel = np.max(velocities)
+            min_vel = np.min(velocities)
+            std_vel = np.std(velocities)
+            
+            mean_acc = np.mean(accelerations)
+            max_acc = np.max(accelerations)
+            min_acc = np.min(accelerations)
+            std_acc = np.std(accelerations)
+            
+            stats_text = (f'Velocity:\n'
+                         f'  Mean: {mean_vel:.2f} m/s\n'
+                         f'  Max: {max_vel:.2f} m/s\n'
+                         f'  Min: {min_vel:.2f} m/s\n'
+                         f'  Std: {std_vel:.2f} m/s\n\n'
+                         f'Acceleration:\n'
+                         f'  Mean: {mean_acc:.2f} m/s²\n'
+                         f'  Max: {max_acc:.2f} m/s²\n'
+                         f'  Min: {min_acc:.2f} m/s²\n'
+                         f'  Std: {std_acc:.2f} m/s²')
+            ax1_ind.text(0.02, 0.98, stats_text, transform=ax1_ind.transAxes, 
+                        verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
+                        fontsize=9)
+        
+        env_plot_filename = os.path.join(plot_dir, f"velocity_acceleration_time_env_{env_idx+1}.png")
+        plt.savefig(env_plot_filename, dpi=300, bbox_inches='tight')
+        plt.close(fig_ind)
+        
+        # Add to overview plot
+        ax1.plot(time_points, velocities, color=env_colors[env_idx], linewidth=1.5, alpha=0.7, linestyle='-')
+        ax2.plot(time_points, accelerations, color=env_colors[env_idx], linewidth=1.5, alpha=0.7, linestyle='--')
+        
+        legend_label = f"Env {env_idx+1}"
+        if param_string:
+            # Truncate long parameter strings for legend
+            if len(param_string) > 50:
+                param_string = param_string[:47] + "..."
+            legend_label += f" ({param_string})"
+        legend_patches.append(mpatches.Patch(color=env_colors[env_idx], label=legend_label))
+    
+    # Finalize overview plot
+    if legend_patches:
+        ax1.grid(True, alpha=0.3)
+        ax1.tick_params(axis='y', labelcolor='blue')
+        ax2.tick_params(axis='y', labelcolor='red')
+        
+        # Add custom legend explaining the line styles
+        from matplotlib.lines import Line2D
+        legend_elements = [
+            Line2D([0], [0], color='blue', lw=2, label='Velocity (solid line)'),
+            Line2D([0], [0], color='red', lw=2, linestyle='--', label='Acceleration (dashed line)')
+        ]
+        legend_elements.extend(legend_patches)
+        ax1.legend(handles=legend_elements, loc='upper right', bbox_to_anchor=(1.15, 1))
+        
+        overview_filename = os.path.join(plot_dir, "velocity_acceleration_time_overview.png")
+        plt.savefig(overview_filename, dpi=300, bbox_inches='tight')
+    
+    plt.close('all')
+    logging.info(f"Velocity and acceleration vs time profile plots saved to {plot_dir}")
+
 def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm="SAC", num_episodes=5, model=None, racing_mode=False, vecnorm_path=None):
     """
     Evaluates a trained model or wall-following policy on the environment.
@@ -1031,6 +1183,12 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
             plot_acceleration_profiles(env_positions, env_velocities, env_params, num_envs, track, model_path, algorithm)
         except Exception as e:
             logging.error(f"Error generating acceleration profile plots: {e}")
+        
+        # Plot velocity vs time profiles
+        try:
+            plot_velocity_time_profiles(env_velocities, env_episode_lengths, env_params, num_envs, num_episodes, model_path, algorithm)
+        except Exception as e:
+            logging.error(f"Error generating velocity vs time profile plots: {e}")
     
     # Compute statistics from evaluation results
     return compute_statistics(env_episode_rewards, env_episode_lengths, env_lap_times, env_velocities, num_envs)
