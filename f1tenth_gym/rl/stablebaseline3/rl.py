@@ -461,37 +461,28 @@ def run_evaluation_episode(eval_env, model, env_idx, is_vec_env, is_recurrent):
 
 def extract_position_velocity(obs, env, agent_idx=0, info=None):
     """Extracts position and velocity data from observation and info."""
-    try:
-        if len(obs) > 1083:  # Ensure observation has expected structure
-            s = float(obs[0])  # Frenet arc length
-            ey = float(obs[1])  # Lateral offset
-            velocity = float(obs[2])  # Velocity
-            
-            position = (s, ey)  # Default to frenet coordinates
-            
-            # Try to get track to convert to cartesian
-            track = None
-            try:
-                if hasattr(env, 'get_attr'):
-                    track = env.get_attr("track", indices=[agent_idx])[0]
-                elif hasattr(env, "track"):
-                    track = env.track
-                    
-                if track is not None:
-                    x_pos, y_pos, _ = track.frenet_to_cartesian(s, ey, 0)
-                    position = (x_pos, y_pos)
-            except:
-                pass
-            
-            # Try to get position from info if available
-            if info and "poses_x" in info and "poses_y" in info:
-                position = (info["poses_x"][agent_idx], info["poses_y"][agent_idx])
-                
-            return position, velocity
-    except:
-        pass
+    s = float(obs[0])  # Frenet arc length
+    ey = float(obs[1])  # Lateral offset
+    velocity = float(obs[2])  # Velocity
     
-    return None, None
+    position = (s, ey)  # Default to frenet coordinates
+    
+    # Try to get track to convert to cartesian
+    track = None
+    if hasattr(env, 'get_attr'):
+        track = env.get_attr("track", indices=[agent_idx])[0]
+    elif hasattr(env, "track"):
+        track = env.track
+        
+    if track is not None:
+        x_pos, y_pos, _ = track.frenet_to_cartesian(s, ey, 0)
+        position = (x_pos, y_pos)
+    
+    # Try to get position from info if available
+    if info and "poses_x" in info and "poses_y" in info:
+        position = (info["poses_x"][agent_idx], info["poses_y"][agent_idx])
+        
+    return position, velocity
 
 def compute_statistics(env_episode_rewards, env_episode_lengths, env_lap_times, env_velocities, num_envs):
     """Computes statistics from evaluation results including velocity and acceleration."""
@@ -672,17 +663,11 @@ def plot_velocity_profiles(env_positions, env_velocities, env_params, num_envs, 
     plot_dir = f"./velocity_profiles_{timestamp}"
     
     if model_path is not None:
-        try:
-            output_dir = os.path.dirname(model_path) or "."
-            os.makedirs(output_dir, exist_ok=True)
-            plot_dir = os.path.join(output_dir, f"velocity_profiles_{timestamp}")
-        except:
-            pass
+        output_dir = os.path.dirname(model_path) or "."
+        os.makedirs(output_dir, exist_ok=True)
+        plot_dir = os.path.join(output_dir, f"velocity_profiles_{timestamp}")
     
-    try:
-        os.makedirs(plot_dir, exist_ok=True)
-    except:
-        plot_dir = "."
+    os.makedirs(plot_dir, exist_ok=True)
     
     # Overview plot
     plt.figure(figsize=(15, 10))
@@ -765,13 +750,10 @@ def plot_velocity_profiles(env_positions, env_velocities, env_params, num_envs, 
         if using_frenet:
             plt.xlabel('s - Distance along track (m)')
             plt.ylabel('ey - Lateral deviation (m)')
-            try:
-                s_min = min([np.min(np.array(env_positions[i])[:, 0]) for i in range(num_envs) if len(env_positions[i]) > 0])
-                s_max = max([np.max(np.array(env_positions[i])[:, 0]) for i in range(num_envs) if len(env_positions[i]) > 0])
-                plt.plot([s_min, s_max], [0, 0], 'k-', linewidth=2)
-                plt.ylim(-2, 2)
-            except:
-                pass
+            s_min = min([np.min(np.array(env_positions[i])[:, 0]) for i in range(num_envs) if len(env_positions[i]) > 0])
+            s_max = max([np.max(np.array(env_positions[i])[:, 0]) for i in range(num_envs) if len(env_positions[i]) > 0])
+            plt.plot([s_min, s_max], [0, 0], 'k-', linewidth=2)
+            plt.ylim(-2, 2)
         else:
             plt.xlabel('X position (m)')
             plt.ylabel('Y position (m)')
@@ -793,17 +775,11 @@ def plot_acceleration_profiles(env_positions, env_velocities, env_params, num_en
     plot_dir = f"./acceleration_profiles_{timestamp}"
     
     if model_path is not None:
-        try:
-            output_dir = os.path.dirname(model_path) or "."
-            os.makedirs(output_dir, exist_ok=True)
-            plot_dir = os.path.join(output_dir, f"acceleration_profiles_{timestamp}")
-        except:
-            pass
+        output_dir = os.path.dirname(model_path) or "."
+        os.makedirs(output_dir, exist_ok=True)
+        plot_dir = os.path.join(output_dir, f"acceleration_profiles_{timestamp}")
     
-    try:
-        os.makedirs(plot_dir, exist_ok=True)
-    except:
-        plot_dir = "."
+    os.makedirs(plot_dir, exist_ok=True)
     
     # Calculate accelerations for each environment
     env_accelerations = []
@@ -918,13 +894,10 @@ def plot_acceleration_profiles(env_positions, env_velocities, env_params, num_en
         if using_frenet:
             plt.xlabel('s - Distance along track (m)')
             plt.ylabel('ey - Lateral deviation (m)')
-            try:
-                s_min = min([np.min(np.array(env_positions[i])[1:, 0]) for i in range(num_envs) if len(env_positions[i]) > 1])
-                s_max = max([np.max(np.array(env_positions[i])[1:, 0]) for i in range(num_envs) if len(env_positions[i]) > 1])
-                plt.plot([s_min, s_max], [0, 0], 'k-', linewidth=2)
-                plt.ylim(-2, 2)
-            except:
-                pass
+            s_min = min([np.min(np.array(env_positions[i])[1:, 0]) for i in range(num_envs) if len(env_positions[i]) > 1])
+            s_max = max([np.max(np.array(env_positions[i])[1:, 0]) for i in range(num_envs) if len(env_positions[i]) > 1])
+            plt.plot([s_min, s_max], [0, 0], 'k-', linewidth=2)
+            plt.ylim(-2, 2)
         else:
             plt.xlabel('X position (m)')
             plt.ylabel('Y position (m)')
@@ -947,17 +920,11 @@ def plot_velocity_time_profiles(env_velocities, env_episode_lengths, env_params,
     plot_dir = f"./velocity_time_profiles_{timestamp}"
     
     if model_path is not None:
-        try:
-            output_dir = os.path.dirname(model_path) or "."
-            os.makedirs(output_dir, exist_ok=True)
-            plot_dir = os.path.join(output_dir, f"velocity_time_profiles_{timestamp}")
-        except:
-            pass
+        output_dir = os.path.dirname(model_path) or "."
+        os.makedirs(output_dir, exist_ok=True)
+        plot_dir = os.path.join(output_dir, f"velocity_time_profiles_{timestamp}")
     
-    try:
-        os.makedirs(plot_dir, exist_ok=True)
-    except:
-        plot_dir = "."
+    os.makedirs(plot_dir, exist_ok=True)
     
     # Simulation time step (assuming 50Hz update rate)
     dt = 0.02
