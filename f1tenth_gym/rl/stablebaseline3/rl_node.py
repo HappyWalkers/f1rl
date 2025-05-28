@@ -17,6 +17,7 @@ import gymnasium
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg
+from scipy.interpolate import interp1d
 # Add the parent directory to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
 from utils.Track import Track
@@ -296,31 +297,113 @@ class RLF1TenthController(Node):
         """
         if self.lidar_scan_in_obs_mode == "NONE":
             return np.array([])
-        elif self.lidar_scan_in_obs_mode == "FULL":
-            # Ensure lidar data has 1080 points, pad if necessary
-            lidar_scan_processed = np.array(lidar_data[:1080], dtype=np.float32)
-            if len(lidar_scan_processed) < 1080:
-                lidar_scan_processed = np.pad(lidar_scan_processed, (0, 1080 - len(lidar_scan_processed)), 'constant', constant_values=30.0)
-            
-            # Handle NaNs or Infs in lidar data (replace with max range)
-            lidar_scan_processed[np.isnan(lidar_scan_processed)] = 30.0
-            lidar_scan_processed[np.isinf(lidar_scan_processed)] = 30.0
-            
+        
+        # Common processing for both FULL and DOWNSAMPLED modes
+        lidar_scan_processed = self._preprocess_lidar_data(lidar_data)
+        self.lidar_data = lidar_scan_processed
+        
+        if self.lidar_scan_in_obs_mode == "FULL":
             return lidar_scan_processed
         elif self.lidar_scan_in_obs_mode == "DOWNSAMPLED":
-            # Ensure lidar data has 1080 points, pad if necessary
-            lidar_array = np.array(lidar_data[:1080], dtype=np.float32)
-            if len(lidar_array) < 1080:
-                lidar_array = np.pad(lidar_array, (0, 1080 - len(lidar_array)), 'constant', constant_values=30.0)
-            
-            # Handle NaNs or Infs in lidar data (replace with max range)
-            lidar_array[np.isnan(lidar_array)] = 30.0
-            lidar_array[np.isinf(lidar_array)] = 30.0
-            
             # Pick every 10th point (1080 / 10 = 108 points)
-            return lidar_array[::10]
+            return lidar_scan_processed[::10]
         else:
             raise ValueError(f"Unknown lidar_scan_in_obs_mode: {self.lidar_scan_in_obs_mode}")
+
+    def _preprocess_lidar_data(self, lidar_data):
+        """
+        Common preprocessing steps for lidar data.
+        
+        Args:
+            lidar_data: Raw lidar scan
+            
+        Returns:
+            Preprocessed lidar scan with interpolated values
+        """
+        # Ensure lidar data has 1080 points, pad if necessary
+        lidar_scan_processed = np.array(lidar_data[:1080], dtype=np.float32)
+        if len(lidar_scan_processed) < 1080:
+            lidar_scan_processed = np.pad(
+                lidar_scan_processed, 
+                (0, 1080 - len(lidar_scan_processed)), 
+                'constant', 
+                constant_values=30.0
+            )
+        
+        # Handle NaNs or Infs in lidar data (replace with zeros for interpolation)
+        lidar_scan_processed[np.isnan(lidar_scan_processed)] = 0
+        lidar_scan_processed[np.isinf(lidar_scan_processed)] = 0
+        
+        # Interpolate small values using nearby valid readings
+        lidar_scan_processed = self._interpolate_lidar_zeros(lidar_scan_processed)
+        
+        return lidar_scan_processed
+
+    def _interpolate_lidar_zeros(self, lidar_scan):
+        """
+        Interpolate small values (<0.05) in lidar scan using scipy interpolation.
+        
+        Args:
+            lidar_scan: numpy array of lidar readings
+            
+        Returns:
+            lidar scan with zero values interpolated
+        """
+        # Find indices of zero and non-zero values
+        zero_mask = (lidar_scan < 0.05)
+        valid_mask = ~zero_mask
+        
+        # If no zeros to interpolate, return original
+        if not np.any(zero_mask):
+            return lidar_scan
+        
+        # If all values are zero, return original (can't interpolate)
+        if not np.any(valid_mask):
+            self.get_logger().warning("All lidar values are zero - cannot interpolate")
+            return lidar_scan
+        
+        # Create a copy to modify
+        interpolated_scan = lidar_scan.copy()
+        
+        try:
+            # Get indices for valid (non-zero) points
+            valid_indices = np.where(valid_mask)[0]
+            valid_values = lidar_scan[valid_indices]
+            
+            # Create interpolation function
+            # Use 'linear' interpolation with bounds_error=False to handle edge cases
+            interp_func = interp1d(
+                valid_indices, 
+                valid_values, 
+                kind='linear', 
+                bounds_error=False,
+                fill_value='extrapolate'
+            )
+            
+            # Get indices where we need to interpolate
+            zero_indices = np.where(zero_mask)[0]
+            
+            # Interpolate the zero values
+            interpolated_values = interp_func(zero_indices)
+            
+            # Replace zero values with interpolated ones
+            interpolated_scan[zero_indices] = interpolated_values
+            
+            # Ensure interpolated values are within reasonable bounds
+            interpolated_scan = np.clip(interpolated_scan, 0.05, 30.0)
+            
+            # Log interpolation statistics occasionally
+            if hasattr(self, 'current_step') and self.current_step % 50 == 0:
+                num_interpolated = np.sum(zero_mask)
+                if num_interpolated > 0:
+                    self.get_logger().debug(f"Interpolated {num_interpolated} zero lidar values")
+            
+        except Exception as e:
+            self.get_logger().warning(f"Lidar interpolation failed: {e}, using original scan")
+            # Fall back to replacing zeros with a reasonable default value
+            interpolated_scan[zero_mask] = 0
+        
+        return interpolated_scan
 
     def lidar_callback(self, msg):
         """Process LiDAR scan data"""
