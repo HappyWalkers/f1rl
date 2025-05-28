@@ -358,7 +358,7 @@ class RLF1TenthController(Node):
         
         # If no zeros to interpolate, return original with empty interpolation mask
         if not np.any(zero_mask):
-            self.get_logger.info("All lidar values are valid - no need to interpolate")
+            self.get_logger().info("All lidar values are valid - no need to interpolate")
             return lidar_scan, np.zeros_like(lidar_scan, dtype=bool)
         
         # If all values are zero, return original (can't interpolate)
