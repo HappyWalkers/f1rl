@@ -358,6 +358,7 @@ class RLF1TenthController(Node):
         
         # If no zeros to interpolate, return original with empty interpolation mask
         if not np.any(zero_mask):
+            self.get_logger.info("All lidar values are valid - no need to interpolate")
             return lidar_scan, np.zeros_like(lidar_scan, dtype=bool)
         
         # If all values are zero, return original (can't interpolate)
@@ -397,10 +398,9 @@ class RLF1TenthController(Node):
             interpolated_scan = np.clip(interpolated_scan, 0.05, 30.0)
             
             # Log interpolation statistics occasionally
-            if hasattr(self, 'current_step') and self.current_step % 50 == 0:
-                num_interpolated = np.sum(zero_mask)
-                if num_interpolated > 0:
-                    self.get_logger().debug(f"Interpolated {num_interpolated} zero lidar values")
+            num_interpolated = np.sum(zero_mask)
+            if num_interpolated > 0:
+                self.get_logger().debug(f"Interpolated {num_interpolated} zero lidar values")
             
         except Exception as e:
             self.get_logger().warning(f"Lidar interpolation failed: {e}, using original scan")
