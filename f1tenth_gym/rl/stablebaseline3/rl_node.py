@@ -55,7 +55,7 @@ class RLF1TenthController(Node):
     """
     def __init__(self, algorithm="SAC", model_path="./logs/best_model/best_model.zip", 
                  vecnorm_path=None, map_index=63, map_dir_="./f1tenth_racetracks/",
-                 lidar_scan_in_obs_mode="FULL"):
+                 lidar_scan_in_obs_mode="FULL", enable_lidar_plot=True):
         super().__init__('rl_f1tenth_controller')
         
         # Topics
@@ -67,6 +67,7 @@ class RLF1TenthController(Node):
         # Store configuration as attributes
         self.algorithm = algorithm
         self.lidar_scan_in_obs_mode = lidar_scan_in_obs_mode
+        self.enable_lidar_plot = enable_lidar_plot
         model_path = os.path.expanduser(model_path)
         
         # Add last steering angle tracking
@@ -251,7 +252,7 @@ class RLF1TenthController(Node):
         )
         
         # Create a timer for control loop
-        self.timer = self.create_timer(0.05, self.control_loop)
+        self.timer = self.create_timer(0.02, self.control_loop)
         
         # Collision detection and reset variables
         self.position_history = []  # Track recent positions
@@ -358,7 +359,7 @@ class RLF1TenthController(Node):
         
         # If no zeros to interpolate, return original with empty interpolation mask
         if not np.any(zero_mask):
-            self.get_logger().info("All lidar values are valid - no need to interpolate")
+            self.get_logger().debug("All lidar values are valid - no need to interpolate")
             return lidar_scan, np.zeros_like(lidar_scan, dtype=bool)
         
         # If all values are zero, return original (can't interpolate)
@@ -573,7 +574,7 @@ class RLF1TenthController(Node):
                     yaw_error = np.arctan2(np.sin(yaw_error), np.cos(yaw_error))
                     status_msg += f", Orientation error: {yaw_error:.3f} rad"
                 status_msg += f", Action: steering={steering:.2f}, speed={speed:.2f}"
-                self.get_logger().info(status_msg)
+                self.get_logger().debug(status_msg)
                 
                 return
         
@@ -628,8 +629,9 @@ class RLF1TenthController(Node):
         # Publish the drive command
         self.drive_pub.publish(drive_msg)
         
-        # Plot lidar scan
-        self.plot_lidar_scan()
+        # Plot lidar scan only if enabled
+        if self.enable_lidar_plot:
+            self.plot_lidar_scan()
         
         # Log info
         self.get_logger().info(
@@ -877,7 +879,7 @@ class RLF1TenthController(Node):
                 'yaw': waypoint[3]  # psi (heading angle)
             }
             
-            self.get_logger().info(
+            self.get_logger().debug(
                 f"Found reset waypoint {closest_idx}: "
                 f"s={reset_position['s']:.2f}, "
                 f"yaw={reset_position['yaw']:.2f} rad"
@@ -915,7 +917,7 @@ class RLF1TenthController(Node):
             else:
                 # Alignment complete
                 self.reset_phase = 'complete'
-                self.get_logger().info(f"Reset alignment complete, orientation error: {orientation_error:.3f} rad")
+                self.get_logger().debug(f"Reset alignment complete, orientation error: {orientation_error:.3f} rad")
                 return 0.0, 0.0
         
         return 0.0, 0.0
@@ -943,7 +945,7 @@ class RLF1TenthController(Node):
             if self.reset_target_waypoint:
                 # Update s_guess for next iterations
                 self.s_guess = self.reset_target_waypoint['s']
-                self.get_logger().info(
+                self.get_logger().debug(
                     f"Reset target orientation: yaw={self.reset_target_waypoint['yaw']:.2f} rad"
                 )
             else:
@@ -958,7 +960,7 @@ class RLF1TenthController(Node):
                 return np.array([0.0, -1.0])  # straight, slow reverse
             else:
                 self.reset_phase = 'align'
-                self.get_logger().info("Backup complete, starting alignment")
+                self.get_logger().debug("Backup complete, starting alignment")
                 return np.array([0.0, 0.0])  # stop briefly
                 
         elif self.reset_phase == 'align':
@@ -969,7 +971,7 @@ class RLF1TenthController(Node):
                 return np.array([steering, speed])
             else:
                 self.reset_phase = 'complete'
-                self.get_logger().info("Alignment complete, starting complete")
+                self.get_logger().debug("Alignment complete, starting complete")
                 return np.array([0.0, 0.0])
             
         elif self.reset_phase == 'complete':
@@ -979,7 +981,7 @@ class RLF1TenthController(Node):
             self.reset_timer = 0
             self.consecutive_collision_count = 0
             self.reset_target_waypoint = None
-            self.get_logger().info("Reset sequence completed successfully")
+            self.get_logger().debug("Reset sequence completed successfully")
             return None
         
         # Default: stop
@@ -1027,9 +1029,11 @@ def main(args=None):
                         help='Directory containing the track maps')
     parser.add_argument('--lidar_scan_in_obs_mode', type=str, default='FULL', choices=['FULL', 'NONE', 'DOWNSAMPLED'],
                         help='Mode for including lidar scans in observations')
+    parser.add_argument('--enable_lidar_plot', action='store_true', default=False,
+                        help='Enable lidar visualization plots')
     
     # Collision detection parameters
-    parser.add_argument('--enable_collision_reset', action='store_true', default=True,
+    parser.add_argument('--enable_collision_reset', action='store_true', default=False,
                         help='Enable automatic collision detection and reset')
     parser.add_argument('--stuck_threshold', type=float, default=0.1,
                         help='Distance threshold (m) for stuck detection')
@@ -1057,7 +1061,8 @@ def main(args=None):
         vecnorm_path=parsed_args.vecnorm_path,
         map_index=parsed_args.map_index,
         map_dir_=parsed_args.map_dir,
-        lidar_scan_in_obs_mode=parsed_args.lidar_scan_in_obs_mode
+        lidar_scan_in_obs_mode=parsed_args.lidar_scan_in_obs_mode,
+        enable_lidar_plot=parsed_args.enable_lidar_plot
     )
     
     # Update collision detection parameters if provided
