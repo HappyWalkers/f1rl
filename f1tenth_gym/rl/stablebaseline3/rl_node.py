@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from scipy.interpolate import interp1d
+import torch  # Added for device checking
 # Add the parent directory to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
 from utils.Track import Track
@@ -286,6 +287,15 @@ class RLF1TenthController(Node):
         )
         
         self.get_logger().info(f"RL F1Tenth Controller initialized with {self.algorithm} algorithm")
+        
+        # Print PyTorch device information at startup
+        self.get_logger().info(f"PyTorch version: {torch.__version__}")
+        self.get_logger().info(f"CUDA available: {torch.cuda.is_available()}")
+        if torch.cuda.is_available():
+            self.get_logger().info(f"CUDA device count: {torch.cuda.device_count()}")
+            self.get_logger().info(f"Current CUDA device: {torch.cuda.current_device()}")
+            self.get_logger().info(f"CUDA device name: {torch.cuda.get_device_name()}")
+        self.get_logger().info(f"Default device: {torch.tensor([1.0]).device}")
 
     def _process_lidar_scan(self, lidar_data):
         """
@@ -587,6 +597,27 @@ class RLF1TenthController(Node):
         
         # Get action from model
         start_time = time.time()
+        
+        # Print device information for model and data
+        try:
+            # Check model device
+            if hasattr(self.model, 'policy') and hasattr(self.model.policy, 'device'):
+                model_device = self.model.policy.device
+            elif hasattr(self.model, 'device'):
+                model_device = self.model.device
+            else:
+                # Try to get device from model parameters
+                model_device = next(self.model.policy.parameters()).device if hasattr(self.model, 'policy') else 'unknown'
+            
+            # Check observation device (convert to torch tensor to see what device it would be on)
+            obs_tensor = torch.tensor(obs, dtype=torch.float32)
+            obs_device = obs_tensor.device
+            
+            # Print device information every 50 steps to avoid spam
+            self.get_logger().info(f"Device info - Model: {model_device}, Observation: {obs_device}, Step: {self.current_step}")
+            
+        except Exception as e:
+            self.get_logger().warning(f"Could not determine device information: {e}")
         
         # Handle differently based on whether the model is recurrent
         if self.is_recurrent:
