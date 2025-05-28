@@ -189,6 +189,7 @@ class RLF1TenthController(Node):
         self.state_ready = False
         self.s_guess = 0.0 # Initialize s_guess for Frenet conversion
         self.current_step = 0 # Track steps for debugging
+        self.interpolation_mask = None  # Track which lidar points were interpolated
 
         # Load Track for Frenet Conversion
         class Config(utils.ConfigYAML): # Simple config mimicking main.py
@@ -334,8 +335,8 @@ class RLF1TenthController(Node):
         lidar_scan_processed[np.isnan(lidar_scan_processed)] = 0
         lidar_scan_processed[np.isinf(lidar_scan_processed)] = 0
         
-        # Interpolate small values using nearby valid readings
-        lidar_scan_processed = self._interpolate_lidar_zeros(lidar_scan_processed)
+        # Interpolate small values using nearby valid readings and store interpolation mask
+        lidar_scan_processed, self.interpolation_mask = self._interpolate_lidar_zeros(lidar_scan_processed)
         
         return lidar_scan_processed
 
@@ -347,23 +348,26 @@ class RLF1TenthController(Node):
             lidar_scan: numpy array of lidar readings
             
         Returns:
-            lidar scan with zero values interpolated
+            tuple: (interpolated_scan, interpolation_mask)
+                - interpolated_scan: lidar scan with interpolated values
+                - interpolation_mask: boolean array indicating which points were interpolated
         """
         # Find indices of zero and non-zero values
         zero_mask = (lidar_scan < 0.05)
         valid_mask = ~zero_mask
         
-        # If no zeros to interpolate, return original
+        # If no zeros to interpolate, return original with empty interpolation mask
         if not np.any(zero_mask):
-            return lidar_scan
+            return lidar_scan, np.zeros_like(lidar_scan, dtype=bool)
         
         # If all values are zero, return original (can't interpolate)
         if not np.any(valid_mask):
             self.get_logger().warning("All lidar values are zero - cannot interpolate")
-            return lidar_scan
+            return lidar_scan, np.zeros_like(lidar_scan, dtype=bool)
         
         # Create a copy to modify
         interpolated_scan = lidar_scan.copy()
+        interpolation_mask = zero_mask.copy()  # Track which points were interpolated
         
         try:
             # Get indices for valid (non-zero) points
@@ -402,8 +406,10 @@ class RLF1TenthController(Node):
             self.get_logger().warning(f"Lidar interpolation failed: {e}, using original scan")
             # Fall back to replacing zeros with a reasonable default value
             interpolated_scan[zero_mask] = 0
+            # Reset interpolation mask since we didn't actually interpolate
+            interpolation_mask = np.zeros_like(lidar_scan, dtype=bool)
         
-        return interpolated_scan
+        return interpolated_scan, interpolation_mask
 
     def lidar_callback(self, msg):
         """Process LiDAR scan data"""
@@ -637,8 +643,8 @@ class RLF1TenthController(Node):
         if not self.show_lidar_plot or self.lidar_data is None:
             return
         
-        # Convert to numpy array for consistent handling
-        lidar_array = np.array(self.lidar_data)
+        # Use processed lidar data (with interpolation) instead of raw data
+        lidar_array = self._preprocess_lidar_data(self.lidar_data)
         
         # Create angle array based on lidar data length
         scan_length = len(lidar_array)
@@ -652,8 +658,25 @@ class RLF1TenthController(Node):
         # Set polar plot limits
         self.ax_polar.set_rlim(0, 30)
         
-        # Plot the lidar scan in polar coordinates
-        self.ax_polar.scatter(angles, lidar_array, s=2, c='blue')
+        # Plot the lidar scan in polar coordinates with different colors for interpolated points
+        if self.interpolation_mask is not None and len(self.interpolation_mask) == len(lidar_array):
+            # Plot original points in blue
+            original_mask = ~self.interpolation_mask
+            if np.any(original_mask):
+                self.ax_polar.scatter(angles[original_mask], lidar_array[original_mask], 
+                                     s=2, c='blue', label='Original')
+            
+            # Plot interpolated points in red
+            if np.any(self.interpolation_mask):
+                self.ax_polar.scatter(angles[self.interpolation_mask], lidar_array[self.interpolation_mask], 
+                                     s=4, c='red', marker='x', label='Interpolated')
+                
+            # Add legend if there are interpolated points
+            if np.any(self.interpolation_mask):
+                self.ax_polar.legend(loc='upper right', fontsize=8)
+        else:
+            # Fallback to single color if interpolation mask is not available
+            self.ax_polar.scatter(angles, lidar_array, s=2, c='blue')
         
         # Set title and show ego vehicle position in polar plot
         title = 'LiDAR Scan - Polar View'
@@ -670,8 +693,26 @@ class RLF1TenthController(Node):
         car_radius = np.array([0.3, 0.2, 0.2])  # Front longer than sides
         self.ax_polar.scatter(car_angles, car_radius, c='red', s=50)
         
-        # Plot the lidar scan as range values
-        self.ax_range.scatter(indices, lidar_array, s=2, c='blue')
+        # Plot the lidar scan as range values with different colors for interpolated points
+        if self.interpolation_mask is not None and len(self.interpolation_mask) == len(lidar_array):
+            # Plot original points in blue
+            original_mask = ~self.interpolation_mask
+            if np.any(original_mask):
+                self.ax_range.scatter(indices[original_mask], lidar_array[original_mask], 
+                                     s=2, c='blue', label='Original')
+            
+            # Plot interpolated points in red
+            if np.any(self.interpolation_mask):
+                self.ax_range.scatter(indices[self.interpolation_mask], lidar_array[self.interpolation_mask], 
+                                     s=4, c='red', marker='x', label='Interpolated')
+                
+            # Add legend if there are interpolated points
+            if np.any(self.interpolation_mask):
+                self.ax_range.legend(loc='upper right', fontsize=8)
+        else:
+            # Fallback to single color if interpolation mask is not available
+            self.ax_range.scatter(indices, lidar_array, s=2, c='blue')
+            
         self.ax_range.set_xlim(0, len(indices))
         self.ax_range.set_ylim(0, 30)
         self.ax_range.set_xlabel('Scan Index (0-1080)')
@@ -679,12 +720,20 @@ class RLF1TenthController(Node):
         self.ax_range.set_title('LiDAR Scan - Range View')
         self.ax_range.grid(True, linestyle='--', alpha=0.7)
         
-        # Add collision statistics text
+        # Add collision statistics text and interpolation info
         collision_text = f"Collisions: {self.collision_count}"
         if self.collision_detected or self.reset_in_progress:
             collision_text += f" | Reset Phase: {self.reset_phase} ({self.reset_timer}/{self.reset_duration})"
             if self.reset_phase == 'align' and self.reset_target_waypoint and 'yaw' in self.reset_target_waypoint:
                 collision_text += f"\nTarget Orientation: {self.reset_target_waypoint['yaw']:.2f} rad"
+        
+        # Add interpolation statistics
+        if self.interpolation_mask is not None:
+            num_interpolated = np.sum(self.interpolation_mask)
+            total_points = len(self.interpolation_mask)
+            interpolation_percentage = (num_interpolated / total_points) * 100 if total_points > 0 else 0
+            collision_text += f"\nInterpolated: {num_interpolated}/{total_points} ({interpolation_percentage:.1f}%)"
+        
         self.ax_range.text(0.02, 0.98, collision_text, 
                           transform=self.ax_range.transAxes,
                           verticalalignment='top',
