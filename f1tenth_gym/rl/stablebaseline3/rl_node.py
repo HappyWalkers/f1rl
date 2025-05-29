@@ -86,6 +86,12 @@ class RLF1TenthController(Node):
         self.previous_steering_angle = 0.0  # Track previous steering angle for rate calculation
         self.previous_timestamp = None  # Track previous timestamp for accurate dt calculation
         
+        # Track previous commanded values for acceleration limiting
+        self.previous_commanded_speed = 0.0  # Track previous commanded speed
+        self.previous_commanded_steering = 0.0  # Track previous commanded steering
+        self.max_acceleration = 4.0  # Maximum allowed acceleration (m/s²)
+        self.max_steering_velocity = 3.2  # Maximum allowed steering velocity (rad/s)
+        
         # For recurrent policies (LSTM state tracking)
         self.is_recurrent = self.algorithm == "RECURRENT_PPO"
         self.lstm_states = None
@@ -580,6 +586,9 @@ class RLF1TenthController(Node):
             self.previous_acceleration = 0.0
             self.previous_steering_angle = 0.0
             self.previous_timestamp = current_time
+            # Initialize commanded values
+            self.previous_commanded_speed = linear_vel
+            self.previous_commanded_steering = 0.0
             self.get_logger().info("Initialized derivative calculation variables from first odometry data")
         
         self.odom_data = {
@@ -681,9 +690,14 @@ class RLF1TenthController(Node):
         current_timestamp = time.time()
         current_velocity = self.odom_data['velocity'] if self.odom_data else 0.0
         
-        # Calculate enhanced drive message fields
+        # Apply acceleration and steering velocity limiting
+        limited_steering, limited_speed = self._calculate_and_limit_commanded_values(
+            steering, speed, current_timestamp
+        )
+        
+        # Calculate enhanced drive message fields using the limited values
         acceleration, steering_angle_velocity, jerk = self._calculate_drive_derivatives(
-            steering, current_velocity, current_timestamp
+            limited_steering, current_velocity, current_timestamp
         )
         
         # Create and populate drive message
@@ -691,10 +705,10 @@ class RLF1TenthController(Node):
         drive_msg.header.stamp = self.get_clock().now().to_msg()
         drive_msg.header.frame_id = 'base_link'
         
-        # Populate all AckermannDrive fields
-        drive_msg.drive.steering_angle = steering
+        # Populate all AckermannDrive fields with limited values
+        drive_msg.drive.steering_angle = limited_steering
         drive_msg.drive.steering_angle_velocity = steering_angle_velocity
-        drive_msg.drive.speed = speed
+        drive_msg.drive.speed = limited_speed
         drive_msg.drive.acceleration = acceleration
         drive_msg.drive.jerk = jerk
         
@@ -704,11 +718,20 @@ class RLF1TenthController(Node):
         # Update QoS statistics for drive commands
         self.qos_stats['drive_commands_sent'] += 1
         
-        # Log message if provided
+        # Log message if provided, showing both original and limited values
         if log_message:
+            extra_info = ""
+            if abs(limited_speed - speed) > 0.01 or abs(limited_steering - steering) > 0.001:
+                extra_info = f" [LIMITED: orig_speed={speed:.2f}→{limited_speed:.2f}, orig_steer={steering:.3f}→{limited_steering:.3f}]"
+            
             self.get_logger().debug(log_message + 
-                f", Action: steering={steering:.2f}, speed={speed:.2f}"
-                f", Derivatives: accel={acceleration:.2f}, steer_vel={steering_angle_velocity:.2f}, jerk={jerk:.2f}")
+                f", Action: steering={limited_steering:.2f}, speed={limited_speed:.2f}"
+                f", Derivatives: accel={acceleration:.2f}, steer_vel={steering_angle_velocity:.2f}, jerk={jerk:.2f}"
+                f"{extra_info}")
+        else:
+            # Log acceleration limiting when it occurs
+            if abs(limited_speed - speed) > 0.01:
+                self.get_logger().debug(f"Speed limited: {speed:.2f} → {limited_speed:.2f} m/s")
 
     def control_loop(self):
         """Main control loop that gets predictions from the model and sends commands"""
@@ -1175,6 +1198,81 @@ class RLF1TenthController(Node):
             self.episode_starts = np.ones((1,), dtype=bool)
             self.get_logger().info("Reset LSTM states")
 
+    def _calculate_and_limit_commanded_values(self, commanded_steering: float, commanded_speed: float, current_timestamp: float) -> Tuple[float, float]:
+        """
+        Calculate commanded acceleration and steering velocity, then apply acceleration limits.
+        
+        Args:
+            commanded_steering: Raw commanded steering angle (rad)
+            commanded_speed: Raw commanded speed (m/s)
+            current_timestamp: Current timestamp (seconds)
+            
+        Returns:
+            Tuple of (limited_steering, limited_speed) with acceleration constraints applied
+        """
+        # Calculate time delta
+        if self.previous_timestamp is not None:
+            dt = current_timestamp - self.previous_timestamp
+            # # Ensure reasonable dt (fallback to nominal if too small/large)
+            # if dt <= 0 or dt > 0.1:  # Sanity check: dt should be ~0.02s
+            #     dt = self.control_loop_dt
+        else:
+            dt = self.control_loop_dt
+        
+        # Get current observed velocity from odometry
+        current_velocity = self.odom_data['velocity'] if self.odom_data else 0.0
+        
+        # Calculate commanded acceleration: (commanded_speed - previous_observed_velocity) / dt
+        commanded_acceleration = (commanded_speed - current_velocity) / dt
+        
+        # Calculate commanded steering velocity: (commanded_steering - previous_commanded_steering) / dt
+        commanded_steering_velocity = (commanded_steering - self.previous_commanded_steering) / dt
+        
+        # Apply acceleration limiting by adjusting commanded speed
+        limited_commanded_speed = commanded_speed
+        if abs(commanded_acceleration) > self.max_acceleration:
+            # Limit the commanded speed to achieve max acceleration
+            if commanded_acceleration > 0:
+                limited_commanded_speed = current_velocity + self.max_acceleration * dt
+                self.get_logger().debug(f"Limiting acceleration: requested={commanded_acceleration:.2f}, limited to {self.max_acceleration:.2f} m/s²")
+            else:
+                limited_commanded_speed = current_velocity - self.max_acceleration * dt
+                self.get_logger().debug(f"Limiting deceleration: requested={commanded_acceleration:.2f}, limited to {-self.max_acceleration:.2f} m/s²")
+            
+            # Recalculate actual commanded acceleration after limiting
+            actual_commanded_acceleration = (limited_commanded_speed - current_velocity) / dt
+        else:
+            actual_commanded_acceleration = commanded_acceleration
+        
+        # Apply steering velocity limiting by adjusting commanded steering
+        limited_commanded_steering = commanded_steering
+        if abs(commanded_steering_velocity) > self.max_steering_velocity:
+            # Limit the commanded steering to achieve max steering velocity
+            if commanded_steering_velocity > 0:
+                limited_commanded_steering = self.previous_commanded_steering + self.max_steering_velocity * dt
+                self.get_logger().debug(f"Limiting steering velocity: requested={commanded_steering_velocity:.2f}, limited to {self.max_steering_velocity:.2f} rad/s")
+            else:
+                limited_commanded_steering = self.previous_commanded_steering - self.max_steering_velocity * dt
+                self.get_logger().debug(f"Limiting steering velocity: requested={commanded_steering_velocity:.2f}, limited to {-self.max_steering_velocity:.2f} rad/s")
+            
+            # Recalculate actual commanded steering velocity after limiting
+            actual_commanded_steering_velocity = (limited_commanded_steering - self.previous_commanded_steering) / dt
+        else:
+            actual_commanded_steering_velocity = commanded_steering_velocity
+        
+        # Log commanded derivatives occasionally for monitoring
+        if self.current_step % 50 == 0:  # Log every 50 steps
+            self.get_logger().debug(
+                f"Commanded derivatives - Acceleration: {actual_commanded_acceleration:.2f} m/s², "
+                f"Steering velocity: {actual_commanded_steering_velocity:.2f} rad/s"
+            )
+        
+        # Update previous commanded values for next iteration
+        self.previous_commanded_steering = limited_commanded_steering
+        self.previous_commanded_speed = limited_commanded_speed
+        
+        return limited_commanded_steering, limited_commanded_speed
+
     def _calculate_drive_derivatives(self, current_steering: float,
                                    current_velocity: float, current_timestamp: float) -> Tuple[float, float, float]:
         """
@@ -1254,6 +1352,12 @@ def main(args=None):
     parser.add_argument('--reset_kp_steering', type=float, default=2.0,
                         help='Proportional gain for reset steering control')
     
+    # Acceleration limiting parameters
+    parser.add_argument('--max_acceleration', type=float, default=8.0,
+                        help='Maximum allowed acceleration (m/s²)')
+    parser.add_argument('--max_steering_velocity', type=float, default=3.2,
+                        help='Maximum allowed steering velocity (rad/s)')
+    
     # Parse known args to avoid conflicts with ROS args
     parsed_args, unknown = parser.parse_known_args(args=args)
     
@@ -1288,6 +1392,12 @@ def main(args=None):
         controller.reset_angle_tolerance = parsed_args.reset_angle_tolerance
     if hasattr(parsed_args, 'reset_kp_steering'):
         controller.reset_kp_steering = parsed_args.reset_kp_steering
+    
+    if hasattr(parsed_args, 'max_acceleration'):
+        controller.max_acceleration = parsed_args.max_acceleration
+    
+    if hasattr(parsed_args, 'max_steering_velocity'):
+        controller.max_steering_velocity = parsed_args.max_steering_velocity
     
     try:
         rclpy.spin(controller)
