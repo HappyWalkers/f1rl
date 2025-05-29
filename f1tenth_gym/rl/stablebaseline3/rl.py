@@ -19,6 +19,12 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib import cm
 
+# Imitation learning imports
+from imitation.algorithms import bc
+from imitation.data import types as data_types
+from imitation.data.rollout import flatten_trajectories
+
+import torch
 
 # Function to select feature extractor based on name
 def get_feature_extractor_class(feature_extractor_name):
@@ -1193,7 +1199,7 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
     # Compute statistics from evaluation results
     return compute_statistics(env_episode_rewards, env_episode_lengths, env_lap_times, env_velocities, num_envs)
 
-def initialize_with_imitation_learning(model, env, imitation_policy_type="PURE_PURSUIT", total_transitions=1000_000, racing_mode=False):
+def initialize_with_imitation_learning(model, env, imitation_policy_type="PURE_PURSUIT", total_transitions=100_000, racing_mode=False, algorithm="SAC"):
     """
     Initialize a reinforcement learning model using imitation learning from a specified policy.
     
@@ -1203,6 +1209,7 @@ def initialize_with_imitation_learning(model, env, imitation_policy_type="PURE_P
         imitation_policy_type: Type of imitation policy (WALL_FOLLOW, PURE_PURSUIT, or LATTICE)
         total_transitions: Total number of transitions to collect across all environments
         racing_mode: Whether to use racing mode with two cars for overtaking scenarios
+        algorithm: The RL algorithm type (e.g., "SAC", "PPO", "RECURRENT_PPO")
     
     Returns:
         model: The initialized model
@@ -1236,7 +1243,7 @@ def initialize_with_imitation_learning(model, env, imitation_policy_type="PURE_P
     
     # Pretrain the model using the demonstrations
     logging.info("Pretraining model with demonstrations")
-    model = pretrain_with_demonstrations(model, demonstrations)
+    model = pretrain_with_demonstrations(model, demonstrations, algorithm, env, raw_vec_env.num_envs)
     
     logging.info("Imitation learning completed")
     return model
@@ -1294,7 +1301,7 @@ def collect_expert_rollouts(model, env, raw_vec_env, expert_policies, total_tran
         is_normalized: Whether environment is normalized
         
     Returns:
-        List of demonstrations (transitions from successful rollouts)
+        List of lists: transitions_by_env[env_idx] = [(obs, action, reward, next_obs, done), ...]
     """
     # Calculate per-environment transition quota to ensure balanced data collection
     num_envs = raw_vec_env.num_envs
@@ -1372,7 +1379,7 @@ def collect_expert_rollouts(model, env, raw_vec_env, expert_policies, total_tran
                             active_envs[i] = False
                             
                             # Only keep rollouts with positive rewards
-                            if current_rollout_rewards[i] > -100:
+                            if current_rollout_rewards[i] > -1000:
                                 # Add to the sorted list
                                 env_rollouts[i].add((current_rollout_rewards[i], current_rollouts[i]))
                                 
@@ -1396,110 +1403,293 @@ def collect_expert_rollouts(model, env, raw_vec_env, expert_policies, total_tran
                 normalized_observations = next_normalized_observations
                 raw_observations = next_raw_observations
     
-    # --- Start of new section for batching demonstrations ---
-    num_envs_for_batching = raw_vec_env.num_envs # Ensure we use the correct num_envs
-
-    # 1. Extract all transitions per environment from env_rollouts
-    # Each element in env_rollouts is a SortedList of (reward, rollout_data)
-    # rollout_data is a list of transitions: (obs, action, reward, next_obs, done)
-    transitions_by_env = [[] for _ in range(num_envs_for_batching)]
+    # Extract transitions grouped by environment
+    transitions_by_env = [[] for _ in range(num_envs)]
     for env_idx, rollout_list_for_env in enumerate(env_rollouts):
         for _reward_val, rollout_data in rollout_list_for_env: 
             for transition in rollout_data: 
                 transitions_by_env[env_idx].append(transition)
 
-    # 2. Determine the number of full batches we can form
-    # Check if any environment has no transitions collected or if num_envs_for_batching is not positive
-    if not num_envs_for_batching > 0 or not all(transitions_by_env) or any(len(t_list) == 0 for t_list in transitions_by_env) :
-        logging.warning("One or more environments have no successful rollouts, or no environments processed. "
-                        "Cannot form batches for pretraining. Pretraining steps requiring the replay buffer will be skipped.")
-        return [] # Return empty list; pretraining loop won't run
+    total_collected_transitions = sum(len(transitions) for transitions in transitions_by_env)
+    logging.info(f"Collected {total_collected_transitions} demonstration transitions from successful rollouts, grouped by environment.")
+    
+    return transitions_by_env
 
-    min_transitions_per_env = min(len(trans_list) for trans_list in transitions_by_env)
-
-    if min_transitions_per_env == 0:
-        # This case should ideally be covered by the comprehensive check above, but acts as a safeguard.
-        logging.warning("Not enough transitions across all environments to form batches (min is 0 after filtering). "
-                        "Pretraining steps requiring the replay buffer will be skipped.")
-        return []
-
-    # 3. Form batches
-    batched_demonstrations = []
-    for i in range(min_transitions_per_env):
+def pretrain_off_policy(model, demonstrations, num_envs):
+    """
+    Pretrain off-policy algorithms (SAC, TD3, DDPG) using demonstrations in the replay buffer.
+    
+    Args:
+        model: The RL model to train (must have replay_buffer)
+        demonstrations: List of lists - demonstrations[env_idx] = [(obs, action, reward, next_obs, done), ...]
+        num_envs: Number of environments used to collect demonstrations
+        
+    Returns:
+        Trained model
+    """
+    if not hasattr(model, 'replay_buffer'):
+        logging.warning("Model does not have a replay buffer. Skipping off-policy pretraining.")
+        return model
+    
+    if not demonstrations or all(len(env_demos) == 0 for env_demos in demonstrations):
+        logging.info("No demonstration transitions to pretrain on. Skipping replay buffer population.")
+        return model
+    
+    # Check that we have the expected number of environments
+    if len(demonstrations) != num_envs:
+        logging.warning(f"Expected {num_envs} environments but got {len(demonstrations)}. Adjusting.")
+        num_envs = len(demonstrations)
+    
+    # Determine how many complete batches we can form
+    min_transitions = min(len(env_demos) for env_demos in demonstrations if len(env_demos) > 0)
+    
+    if min_transitions == 0:
+        logging.warning("Not enough transitions to form batches. Skipping replay buffer population.")
+        return model
+    
+    # Form batches and add to replay buffer
+    logging.info(f"Adding {min_transitions} batches of demonstrations to the replay buffer.")
+    for i in range(min_transitions):
         batch_obs_list = []
         batch_action_list = []
         batch_reward_list = []
         batch_next_obs_list = []
         batch_done_list = []
 
-        for env_j in range(num_envs_for_batching):
-            # Each transition is (obs, action, reward, next_obs, done)
-            obs, action, reward, next_obs, done = transitions_by_env[env_j][i]
-            batch_obs_list.append(obs)
-            batch_action_list.append(action)
-            batch_reward_list.append(reward)
-            batch_next_obs_list.append(next_obs)
-            batch_done_list.append(done)
+        for env_j in range(num_envs):
+            if i < len(demonstrations[env_j]):
+                obs, action, reward, next_obs, done = demonstrations[env_j][i]
+                batch_obs_list.append(obs)
+                batch_action_list.append(action)
+                batch_reward_list.append(reward)
+                batch_next_obs_list.append(next_obs)
+                batch_done_list.append(done)
         
-        # Stack to create numpy arrays for the batch
-        batched_demonstrations.append((
-            np.array(batch_obs_list),      # Shape: (num_envs, obs_dim)
-            np.array(batch_action_list),   # Shape: (num_envs, action_dim)
-            np.array(batch_reward_list),   # Shape: (num_envs,)
-            np.array(batch_next_obs_list), # Shape: (num_envs, obs_dim)
-            np.array(batch_done_list)      # Shape: (num_envs,)
-        ))
-
-    total_batched_transitions = min_transitions_per_env * num_envs_for_batching
-    logging.info(f"Collected and batched {total_batched_transitions} demonstration transitions, "
-                 f"forming {min_transitions_per_env} batches of size {num_envs_for_batching}.")
+        # Only add batch if we have data from all environments with transitions
+        if len(batch_obs_list) == num_envs:
+            batch_obs = np.array(batch_obs_list)
+            batch_action = np.array(batch_action_list)
+            batch_reward = np.array(batch_reward_list)
+            batch_next_obs = np.array(batch_next_obs_list)
+            batch_done = np.array(batch_done_list)
+            
+            infos = [{} for _ in range(num_envs)]
+            model.replay_buffer.add(batch_obs, batch_next_obs, batch_action, batch_reward, batch_done, infos)
     
-    return batched_demonstrations
-    # --- End of new section ---
+    # Perform gradient steps on the demonstrations
+    if hasattr(model, 'train'):
+        logging.info("Training on demonstrations using replay buffer")
+        # Initialize the model by calling learn with 1 step
+        model.learn(total_timesteps=1, log_interval=1) 
+        
+        # Now perform gradient steps
+        gradient_steps = 10_000
+        with tqdm(total=gradient_steps, desc="Off-Policy Imitation Learning Progress") as pbar:
+            for _ in range(gradient_steps): 
+                model.train(gradient_steps=1, batch_size=model.batch_size)
+                pbar.update(1)
+    else:
+        logging.warning("Model does not have a 'train' method. Skipping gradient steps on demonstrations.")
 
-def pretrain_with_demonstrations(model, demonstrations):
+    return model
+
+def pretrain_on_policy(model, demonstrations, env):
     """
-    Pretrain the model using filtered demonstrations.
+    Pretrain on-policy algorithms (PPO, RecurrentPPO) using behavior cloning.
     
     Args:
         model: The RL model to train
-        demonstrations: List of transitions from successful rollouts
+        demonstrations: List of lists - demonstrations[env_idx] = [(obs, action, reward, next_obs, done), ...]
+        env: The environment (needed for observation/action space)
         
     Returns:
         Trained model
     """
-    if hasattr(model, 'replay_buffer'):
-        if not demonstrations: # Check if demonstrations list is empty (it's a list of batches)
-            logging.info("No demonstration batches to pretrain on. Skipping replay buffer population and subsequent training on demonstrations.")
-        else:
-            # demonstrations is now a list of (batch_obs, batch_action, batch_reward, batch_next_obs, batch_done)
-            logging.info(f"Adding {len(demonstrations)} batches of demonstrations to the replay buffer.")
-            for batch_obs, batch_action, batch_reward, batch_next_obs, batch_done in demonstrations:
-                # batch_obs, batch_action, etc. are already numpy arrays with shape (num_envs, ...)
-                num_envs_in_batch = batch_obs.shape[0]
-                infos = [{} for _ in range(num_envs_in_batch)] # Create a list of info dicts for the batch
-                model.replay_buffer.add(batch_obs, batch_next_obs, batch_action, batch_reward, batch_done, infos)
-            
-            # Perform gradient steps on the demonstrations, only if model has a train method
-            if hasattr(model, 'train'):
-                logging.info("Training on demonstrations")
-                # Initialize the model by calling learn with 1 step before training
-                # This ensures the logger and other components are properly set up.
-                # reset_num_timesteps defaults to True for the first call to model.learn(), which is appropriate here.
-                model.learn(total_timesteps=1, log_interval=1) 
+    if not demonstrations or all(len(env_demos) == 0 for env_demos in demonstrations):
+        logging.info("No demonstration transitions to pretrain on. Skipping behavior cloning.")
+        return model
+    
+    # Flatten all demonstrations from all environments
+    all_transitions = []
+    for env_demos in demonstrations:
+        all_transitions.extend(env_demos)
+    
+    logging.info(f"Starting behavior cloning with {len(all_transitions)} transitions")
+    
+    # Convert our transitions to the format expected by imitation library
+    observations = []
+    actions = []
+    next_observations = []
+    dones = []
+    
+    for obs, action, reward, next_obs, done in all_transitions:
+        observations.append(obs)
+        actions.append(action)
+        next_observations.append(next_obs)
+        dones.append(done)
+    
+    observations = np.array(observations)
+    actions = np.array(actions)
+    next_observations = np.array(next_observations)
+    dones = np.array(dones)
+    
+    # Create Transitions object for imitation library with complete data
+    transitions = data_types.Transitions(
+        obs=observations,
+        acts=actions,
+        next_obs=next_observations,
+        dones=dones,
+        infos=[{} for _ in range(len(observations))]
+    )
+    
+    # Check if this is a recurrent policy and handle accordingly
+    policy_for_bc = model.policy
+    
+    # For recurrent policies, we need to create a non-recurrent wrapper
+    if hasattr(model.policy, 'lstm_actor'):
+        logging.info("Detected recurrent policy. Creating non-recurrent wrapper for behavior cloning.")
+        
+        # Create a simple wrapper that provides LSTM states when needed
+        class NonRecurrentWrapper(torch.nn.Module):
+            def __init__(self, original_policy):
+                super().__init__()
+                # Store as a module so it's properly registered
+                self.original_policy = original_policy
+                self.observation_space = original_policy.observation_space
+                self.action_space = original_policy.action_space
                 
-                # Now we can safely call train
-                gradient_steps = 10_000 # This can be made configurable if needed
-                with tqdm(total=gradient_steps, desc="Imitation Learning Progress") as pbar:
-                    for _ in range(gradient_steps): 
-                        model.train(gradient_steps=1, batch_size=model.batch_size)
-                        pbar.update(1)
-            else:
-                logging.info("Model does not have a 'train' method. Skipping gradient steps on demonstrations.")
+            def evaluate_actions(self, obs, actions):
+                # For BC training, provide dummy LSTM states
+                batch_size = obs.shape[0]
+                device = obs.device if hasattr(obs, 'device') else 'cpu'
+                episode_starts = torch.ones((batch_size,), dtype=torch.float32, device=device)
+                
+                # Create dummy LSTM states for recurrent policy
+                from sb3_contrib.common.recurrent.type_aliases import RNNStates
+                hidden_state = torch.zeros((self.original_policy.lstm_actor.num_layers, batch_size, self.original_policy.lstm_actor.hidden_size), device=device)
+                cell_state = torch.zeros((self.original_policy.lstm_actor.num_layers, batch_size, self.original_policy.lstm_actor.hidden_size), device=device)
+                lstm_states = RNNStates((hidden_state, cell_state), (hidden_state, cell_state))
+                
+                return self.original_policy.evaluate_actions(obs, actions, lstm_states, episode_starts)
+                
+            def forward(self, obs, deterministic=False):
+                # For BC, we just need the action distribution
+                batch_size = obs.shape[0]
+                device = obs.device if hasattr(obs, 'device') else 'cpu'
+                episode_starts = torch.ones((batch_size,), dtype=torch.float32, device=device)
+                
+                # Create dummy LSTM states for recurrent policy
+                from sb3_contrib.common.recurrent.type_aliases import RNNStates
+                hidden_state = torch.zeros((self.original_policy.lstm_actor.num_layers, batch_size, self.original_policy.lstm_actor.hidden_size), device=device)
+                cell_state = torch.zeros((self.original_policy.lstm_actor.num_layers, batch_size, self.original_policy.lstm_actor.hidden_size), device=device)
+                lstm_states = RNNStates((hidden_state, cell_state), (hidden_state, cell_state))
+                
+                return self.original_policy.forward(obs, lstm_states, episode_starts, deterministic)
+                
+            def predict(self, observation, state=None, episode_start=None, deterministic=False):
+                return self.original_policy.predict(observation, state, episode_start, deterministic)
+                
+            @property
+            def device(self):
+                # Return the device of the original policy
+                try:
+                    return next(self.original_policy.parameters()).device
+                except StopIteration:
+                    return torch.device('cpu')
+                
+            def to(self, device):
+                # Move the original policy to the device more carefully
+                # Use the parent class to() method to move this module
+                super().to(device)
+                # Move the original policy
+                self.original_policy = self.original_policy.to(device)
+                return self
+                
+            def parameters(self):
+                # Delegate parameters to the original policy
+                return self.original_policy.parameters()
+                
+            def state_dict(self):
+                # Delegate state_dict to the original policy
+                return self.original_policy.state_dict()
+                
+            def load_state_dict(self, state_dict):
+                # Delegate load_state_dict to the original policy
+                return self.original_policy.load_state_dict(state_dict)
+                
+            def set_training_mode(self, mode: bool):
+                # Delegate training mode to the original policy
+                return self.original_policy.set_training_mode(mode)
+        
+        policy_for_bc = NonRecurrentWrapper(model.policy)
+    
+    # Create behavior cloning trainer
+    bc_trainer = bc.BC(
+        observation_space=env.observation_space,
+        action_space=env.action_space,
+        demonstrations=transitions,
+        policy=policy_for_bc,  # Use the wrapped policy for recurrent models
+        rng=np.random.default_rng(42),
+        batch_size=min(512, len(all_transitions) // 4),  # Adaptive batch size
+        optimizer_kwargs={"lr": 3e-4},
+        ent_weight=0.01,
+        l2_weight=1e-5,
+    )
+    
+    # Train using behavior cloning
+    n_epochs = max(1, 50_000 // len(all_transitions))  # More epochs for smaller datasets
+    logging.info(f"Training behavior cloning for {n_epochs} epochs")
+    
+    bc_trainer.train(
+        n_epochs=n_epochs,
+        log_interval=max(1, n_epochs // 10),
+        progress_bar=True
+    )
+    
+    # Update the model's policy with the trained policy
+    logging.info(f"Model policy type: {type(model.policy)}")
+    logging.info(f"BC trainer policy type: {type(bc_trainer.policy)}")
+    logging.info(f"Model policy has lstm_actor: {hasattr(model.policy, 'lstm_actor')}")
+    
+    if hasattr(model.policy, 'lstm_actor'):
+        # For recurrent policies, we need to update the underlying parameters
+        logging.info("Updating recurrent policy parameters from behavior cloning.")
+        # Copy the trained parameters back to the original policy
+        model.policy.load_state_dict(bc_trainer.policy.original_policy.state_dict())
+        logging.info("Successfully updated original policy parameters.")
     else:
-        logging.info("Model does not have a replay buffer. Skipping pretraining with demonstrations.")
-
+        logging.info("Replacing model policy with BC trained policy.")
+        model.policy = bc_trainer.policy
+    
+    logging.info("Behavior cloning completed")
     return model
+
+def pretrain_with_demonstrations(model, demonstrations, algorithm, env, num_envs):
+    """
+    Pretrain the model using demonstrations, choosing the appropriate method based on model type.
+    
+    Args:
+        model: The RL model to train
+        demonstrations: List of lists - demonstrations[env_idx] = [(obs, action, reward, next_obs, done), ...]
+        algorithm: The algorithm type (for logging purposes)
+        env: The environment
+        num_envs: Number of environments used to collect demonstrations
+        
+    Returns:
+        Trained model
+    """
+    if not demonstrations or all(len(env_demos) == 0 for env_demos in demonstrations):
+        logging.info("No demonstrations available for pretraining.")
+        return model
+    
+    # Determine if this is an off-policy or on-policy algorithm by checking model attributes
+    # Off-policy algorithms typically have a replay buffer
+    if hasattr(model, 'replay_buffer'):
+        logging.info(f"Detected off-policy model ({algorithm}) - using replay buffer pretraining")
+        return pretrain_off_policy(model, demonstrations, num_envs)
+    else:
+        logging.info(f"Detected on-policy model ({algorithm}) - using behavior cloning")
+        return pretrain_on_policy(model, demonstrations, env)
 
 def make_env(env_id, rank, seed=0, env_kwargs=None):
     """
@@ -1668,7 +1858,7 @@ def train(env, seed, num_envs=1, num_param_cmbs=None, use_domain_randomization=F
     # --- Imitation Learning (Optional, might need adaptation for VecEnv) ---
     if use_imitation_learning:
         logging.info("Using imitation learning to bootstrap the model.")
-        model = initialize_with_imitation_learning(model, env, imitation_policy_type=imitation_policy_type, racing_mode=racing_mode)
+        model = initialize_with_imitation_learning(model, env, imitation_policy_type=imitation_policy_type, racing_mode=racing_mode, algorithm=algorithm)
     else:
         logging.info("Skipping imitation learning.")
 
