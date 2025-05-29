@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 import numpy as np
 from sensor_msgs.msg import LaserScan
 from ackermann_msgs.msg import AckermannDriveStamped
@@ -64,6 +65,9 @@ class RLF1TenthController(Node):
         odom_topic = '/ego_racecar/odom'
         # odom_topic = '/pf/pose/odom'
         drive_topic = '/drive'
+        
+        # Configure QoS profiles for real-time, low-latency operation
+        self._setup_qos_profiles()
         
         # Store configuration as attributes
         self.algorithm = algorithm
@@ -236,24 +240,27 @@ class RLF1TenthController(Node):
             LaserScan, 
             lidar_topic, 
             self.lidar_callback, 
-            10
+            self.sensor_qos  # Use sensor QoS for low-latency LiDAR data
         )
         self.odom_sub = self.create_subscription(
             Odometry,
             odom_topic,
             self.odom_callback,
-            10
+            self.odometry_qos  # Use odometry QoS for latest pose data
         )
         
         # Publisher
         self.drive_pub = self.create_publisher(
             AckermannDriveStamped,
             drive_topic,
-            10
+            self.control_qos  # Use control QoS for reliable command delivery
         )
         
         # Create a timer for control loop
         self.timer = self.create_timer(0.02, self.control_loop)
+        
+        # QoS monitoring and statistics
+        self._setup_qos_monitoring()
         
         # Collision detection and reset variables
         self.position_history = []  # Track recent positions
@@ -283,7 +290,7 @@ class RLF1TenthController(Node):
         self.reset_pose_pub = self.create_publisher(
             Odometry,
             '/ego_racecar/reset_pose',
-            10
+            self.reset_qos  # Use reset QoS for reliable reset commands
         )
         
         self.get_logger().info(f"RL F1Tenth Controller initialized with {self.algorithm} algorithm")
@@ -296,6 +303,100 @@ class RLF1TenthController(Node):
             self.get_logger().info(f"Current CUDA device: {torch.cuda.current_device()}")
             self.get_logger().info(f"CUDA device name: {torch.cuda.get_device_name()}")
         self.get_logger().info(f"Default device: {torch.tensor([1.0]).device}")
+
+    def _setup_qos_profiles(self):
+        """
+        Setup QoS profiles optimized for real-time, low-latency autonomous racing.
+        
+        Based on ROS 2 QoS best practices for different message types:
+        - Sensor data: Best effort, small queue for latest readings
+        - Odometry: Best effort, keep last 1 for most recent pose
+        - Control commands: Reliable delivery to ensure commands are received
+        """
+        # Sensor data QoS: Prioritize latest data over reliability
+        # Use "best effort" for speed, small queue to minimize delay
+        self.sensor_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,  # Only keep the latest reading
+            durability=DurabilityPolicy.VOLATILE
+        )
+        
+        # Odometry QoS: Similar to sensor data but slightly more reliable
+        # for critical state information
+        self.odometry_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,  # Only keep the latest pose
+            durability=DurabilityPolicy.VOLATILE
+        )
+        
+        # Control command QoS: Ensure commands are delivered reliably
+        # but with minimal buffering to avoid stale commands
+        self.control_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,  # Only keep the latest command
+            durability=DurabilityPolicy.VOLATILE
+        )
+        
+        # Reset pose QoS: Reliable delivery for critical reset commands
+        self.reset_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            durability=DurabilityPolicy.VOLATILE
+        )
+        
+        self.get_logger().info("QoS profiles configured for low-latency real-time control")
+        self.get_logger().info("- LiDAR: Best effort, depth=1 (latest sensor data)")
+        self.get_logger().info("- Odometry: Best effort, depth=1 (latest pose)")
+        self.get_logger().info("- Drive commands: Reliable, depth=1 (ensure delivery)")
+        self.get_logger().info("- Reset commands: Reliable, depth=1 (critical commands)")
+
+    def _setup_qos_monitoring(self):
+        """
+        Setup QoS event monitoring to track message delivery performance.
+        This helps identify any QoS-related issues in real-time.
+        """
+        # QoS statistics
+        self.qos_stats = {
+            'lidar_messages_received': 0,
+            'odom_messages_received': 0,
+            'drive_commands_sent': 0,
+            'last_lidar_time': None,
+            'last_odom_time': None,
+            'max_lidar_interval': 0.0,
+            'max_odom_interval': 0.0
+        }
+        
+        # Create a timer for periodic QoS statistics reporting
+        self.qos_stats_timer = self.create_timer(5.0, self._report_qos_statistics)
+        
+        self.get_logger().info("QoS monitoring initialized - statistics will be reported every 5 seconds")
+
+    def _report_qos_statistics(self):
+        """Report QoS and message delivery statistics periodically"""
+        stats = self.qos_stats
+        
+        # Calculate message rates
+        current_time = time.time()
+        if stats['last_lidar_time'] and stats['last_odom_time']:
+            lidar_rate = stats['lidar_messages_received'] / 5.0 if stats['lidar_messages_received'] > 0 else 0
+            odom_rate = stats['odom_messages_received'] / 5.0 if stats['odom_messages_received'] > 0 else 0
+            
+            self.get_logger().info(
+                f"QoS Stats - LiDAR: {lidar_rate:.1f}Hz (max gap: {stats['max_lidar_interval']:.3f}s), "
+                f"Odom: {odom_rate:.1f}Hz (max gap: {stats['max_odom_interval']:.3f}s), "
+                f"Drive commands: {stats['drive_commands_sent']}"
+            )
+        
+        # Reset counters for next period
+        stats['lidar_messages_received'] = 0
+        stats['odom_messages_received'] = 0
+        stats['drive_commands_sent'] = 0
+        stats['max_lidar_interval'] = 0.0
+        stats['max_odom_interval'] = 0.0
 
     def _process_lidar_scan(self, lidar_data):
         """
@@ -424,11 +525,29 @@ class RLF1TenthController(Node):
 
     def lidar_callback(self, msg):
         """Process LiDAR scan data"""
+        current_time = time.time()
+        
+        # Update QoS statistics
+        self.qos_stats['lidar_messages_received'] += 1
+        if self.qos_stats['last_lidar_time'] is not None:
+            interval = current_time - self.qos_stats['last_lidar_time']
+            self.qos_stats['max_lidar_interval'] = max(self.qos_stats['max_lidar_interval'], interval)
+        self.qos_stats['last_lidar_time'] = current_time
+        
         self.lidar_data = msg.ranges
         self.check_state_ready()
     
     def odom_callback(self, msg):
         """Process odometry data"""
+        current_time = time.time()
+        
+        # Update QoS statistics
+        self.qos_stats['odom_messages_received'] += 1
+        if self.qos_stats['last_odom_time'] is not None:
+            interval = current_time - self.qos_stats['last_odom_time']
+            self.qos_stats['max_odom_interval'] = max(self.qos_stats['max_odom_interval'], interval)
+        self.qos_stats['last_odom_time'] = current_time
+        
         pose = msg.pose.pose
         twist = msg.twist.twist
         
@@ -574,6 +693,9 @@ class RLF1TenthController(Node):
                 drive_msg.drive.speed = speed
                 self.drive_pub.publish(drive_msg)
                 
+                # Update QoS statistics for drive commands
+                self.qos_stats['drive_commands_sent'] += 1
+                
                 # Log reset status with phase information
                 status_msg = f"Reset phase: {self.reset_phase} ({self.reset_timer}/{self.reset_duration})"
                 if self.reset_phase == 'align' and self.reset_target_waypoint:
@@ -638,6 +760,9 @@ class RLF1TenthController(Node):
         
         # Publish the drive command
         self.drive_pub.publish(drive_msg)
+        
+        # Update QoS statistics for drive commands
+        self.qos_stats['drive_commands_sent'] += 1
         
         # Plot lidar scan only if enabled
         if self.enable_lidar_plot:
