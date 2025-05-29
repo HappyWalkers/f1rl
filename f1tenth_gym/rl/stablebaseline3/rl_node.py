@@ -20,6 +20,7 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from scipy.interpolate import interp1d
 import torch  # Added for device checking
+from typing import Tuple
 # Add the parent directory to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
 from utils.Track import Track
@@ -77,6 +78,13 @@ class RLF1TenthController(Node):
         
         # Add last steering angle tracking
         self.last_steering_angle = 0.0
+        
+        # Enhanced drive message calculation variables
+        self.control_loop_dt = 0.02  # Control loop frequency (50 Hz)
+        self.previous_velocity = 0.0  # Track previous velocity for acceleration calculation
+        self.previous_acceleration = 0.0  # Track previous acceleration for jerk calculation
+        self.previous_steering_angle = 0.0  # Track previous steering angle for rate calculation
+        self.previous_timestamp = None  # Track previous timestamp for accurate dt calculation
         
         # For recurrent policies (LSTM state tracking)
         self.is_recurrent = self.algorithm == "RECURRENT_PPO"
@@ -566,6 +574,14 @@ class RLF1TenthController(Node):
         linear_vel = twist.linear.x
         angular_vel = twist.angular.z
         
+        # Initialize previous values on first odometry message
+        if self.previous_timestamp is None:
+            self.previous_velocity = linear_vel
+            self.previous_acceleration = 0.0
+            self.previous_steering_angle = 0.0
+            self.previous_timestamp = current_time
+            self.get_logger().info("Initialized derivative calculation variables from first odometry data")
+        
         self.odom_data = {
             'x': x,
             'y': y,
@@ -685,12 +701,26 @@ class RLF1TenthController(Node):
                 steering = float(reset_action[0])
                 speed = float(reset_action[1])
                 
+                # Get current timestamp for derivative calculations
+                current_timestamp = time.time()
+                current_velocity = self.odom_data['velocity'] if self.odom_data else 0.0
+                
+                # Calculate enhanced drive message fields
+                acceleration, steering_angle_velocity, jerk = self._calculate_drive_derivatives(
+                    steering, speed, current_velocity, current_timestamp
+                )
+                
                 # Send reset command
                 drive_msg = AckermannDriveStamped()
                 drive_msg.header.stamp = self.get_clock().now().to_msg()
                 drive_msg.header.frame_id = 'base_link'
+                
+                # Populate all AckermannDrive fields
                 drive_msg.drive.steering_angle = steering
+                drive_msg.drive.steering_angle_velocity = steering_angle_velocity
                 drive_msg.drive.speed = speed
+                drive_msg.drive.acceleration = acceleration
+                drive_msg.drive.jerk = jerk
                 self.drive_pub.publish(drive_msg)
                 
                 # Update QoS statistics for drive commands
@@ -706,6 +736,7 @@ class RLF1TenthController(Node):
                     yaw_error = np.arctan2(np.sin(yaw_error), np.cos(yaw_error))
                     status_msg += f", Orientation error: {yaw_error:.3f} rad"
                 status_msg += f", Action: steering={steering:.2f}, speed={speed:.2f}"
+                status_msg += f", Derivatives: accel={acceleration:.2f}, steer_vel={steering_angle_velocity:.2f}, jerk={jerk:.2f}"
                 self.get_logger().debug(status_msg)
                 
                 return
@@ -746,6 +777,15 @@ class RLF1TenthController(Node):
         steering = float(action[0])
         speed = float(action[1])
         
+        # Get current timestamp for derivative calculations
+        current_timestamp = time.time()
+        current_velocity = self.odom_data['velocity'] if self.odom_data else 0.0
+        
+        # Calculate enhanced drive message fields
+        acceleration, steering_angle_velocity, jerk = self._calculate_drive_derivatives(
+            steering, speed, current_velocity, current_timestamp
+        )
+        
         # Store command in history
         self.command_history.append((steering, speed))
         if len(self.command_history) > self.position_history_size:
@@ -754,9 +794,12 @@ class RLF1TenthController(Node):
         # Update last steering angle
         self.last_steering_angle = steering
         
-        # Limit values if needed based on the constraints in the environment
+        # Populate all AckermannDrive fields
         drive_msg.drive.steering_angle = steering
+        drive_msg.drive.steering_angle_velocity = steering_angle_velocity
         drive_msg.drive.speed = speed
+        drive_msg.drive.acceleration = acceleration
+        drive_msg.drive.jerk = jerk
         
         # Publish the drive command
         self.drive_pub.publish(drive_msg)
@@ -772,6 +815,7 @@ class RLF1TenthController(Node):
         self.get_logger().info(
             f"State: s={obs[0]:.4f}, ey={obs[1]:.4f}, vel={obs[2]:.4f}, yaw={obs[3]:.4f}, " +
             f"Action: steering={steering:.4f}, speed={speed:.4f}, " +
+            f"Derivatives: accel={acceleration:.2f}m/s², steer_vel={steering_angle_velocity:.2f}rad/s, jerk={jerk:.2f}m/s³, " +
             f"Inference time: {inference_time*1000:.2f}ms"
         )
     
@@ -1148,6 +1192,51 @@ class RLF1TenthController(Node):
             self.lstm_states = None
             self.episode_starts = np.ones((1,), dtype=bool)
             self.get_logger().info("Reset LSTM states")
+
+    def _calculate_drive_derivatives(self, current_steering: float, current_speed: float, 
+                                   current_velocity: float, current_timestamp: float) -> Tuple[float, float, float]:
+        """
+        Calculate acceleration, steering angle velocity, and jerk for AckermannDrive message.
+        
+        Args:
+            current_steering: Current commanded steering angle (rad)
+            current_speed: Current commanded speed (m/s)
+            current_velocity: Current actual velocity from odometry (m/s)
+            current_timestamp: Current timestamp (seconds)
+            
+        Returns:
+            Tuple of (acceleration, steering_angle_velocity, jerk) in SI units
+        """
+        # Calculate actual time delta if we have previous timestamp
+        if self.previous_timestamp is not None:
+            dt = current_timestamp - self.previous_timestamp
+            # # Ensure reasonable dt (fallback to nominal if too small/large)
+            # if dt <= 0 or dt > 0.1:  # Sanity check: dt should be ~0.02s
+            #     dt = self.control_loop_dt
+        else:
+            dt = self.control_loop_dt
+        
+        # Calculate acceleration (m/s²) from velocity change
+        acceleration = (current_velocity - self.previous_velocity) / dt
+        
+        # Calculate steering angle velocity (rad/s) from steering angle change
+        steering_angle_velocity = (current_steering - self.previous_steering_angle) / dt
+        
+        # Calculate jerk (m/s³) from acceleration change
+        jerk = (acceleration - self.previous_acceleration) / dt
+        
+        # # Apply reasonable bounds to prevent extreme values due to noise
+        # acceleration = np.clip(acceleration, -20.0, 20.0)  # Reasonable acceleration limits
+        # steering_angle_velocity = np.clip(steering_angle_velocity, -10.0, 10.0)  # Reasonable steering rate limits
+        # jerk = np.clip(jerk, -50.0, 50.0)  # Reasonable jerk limits
+        
+        # Update previous values for next iteration
+        self.previous_velocity = current_velocity
+        self.previous_acceleration = acceleration
+        self.previous_steering_angle = current_steering
+        self.previous_timestamp = current_timestamp
+        
+        return acceleration, steering_angle_velocity, jerk
 
 def main(args=None):
     # Parse command line arguments
