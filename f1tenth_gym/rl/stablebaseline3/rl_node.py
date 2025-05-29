@@ -668,6 +668,48 @@ class RLF1TenthController(Node):
 
         return observation
     
+    def _publish_drive_command(self, steering: float, speed: float, log_message: str = None) -> None:
+        """
+        Create and publish an AckermannDriveStamped message with all required fields.
+        
+        Args:
+            steering: Steering angle in radians
+            speed: Speed in m/s
+            log_message: Optional additional message to log
+        """
+        # Get current timestamp for derivative calculations
+        current_timestamp = time.time()
+        current_velocity = self.odom_data['velocity'] if self.odom_data else 0.0
+        
+        # Calculate enhanced drive message fields
+        acceleration, steering_angle_velocity, jerk = self._calculate_drive_derivatives(
+            steering, current_velocity, current_timestamp
+        )
+        
+        # Create and populate drive message
+        drive_msg = AckermannDriveStamped()
+        drive_msg.header.stamp = self.get_clock().now().to_msg()
+        drive_msg.header.frame_id = 'base_link'
+        
+        # Populate all AckermannDrive fields
+        drive_msg.drive.steering_angle = steering
+        drive_msg.drive.steering_angle_velocity = steering_angle_velocity
+        drive_msg.drive.speed = speed
+        drive_msg.drive.acceleration = acceleration
+        drive_msg.drive.jerk = jerk
+        
+        # Publish the drive command
+        self.drive_pub.publish(drive_msg)
+        
+        # Update QoS statistics for drive commands
+        self.qos_stats['drive_commands_sent'] += 1
+        
+        # Log message if provided
+        if log_message:
+            self.get_logger().debug(log_message + 
+                f", Action: steering={steering:.2f}, speed={speed:.2f}"
+                f", Derivatives: accel={acceleration:.2f}, steer_vel={steering_angle_velocity:.2f}, jerk={jerk:.2f}")
+
     def control_loop(self):
         """Main control loop that gets predictions from the model and sends commands"""
         if not self.state_ready:
@@ -701,43 +743,8 @@ class RLF1TenthController(Node):
                 steering = float(reset_action[0])
                 speed = float(reset_action[1])
                 
-                # Get current timestamp for derivative calculations
-                current_timestamp = time.time()
-                current_velocity = self.odom_data['velocity'] if self.odom_data else 0.0
-                
-                # Calculate enhanced drive message fields
-                acceleration, steering_angle_velocity, jerk = self._calculate_drive_derivatives(
-                    steering, speed, current_velocity, current_timestamp
-                )
-                
                 # Send reset command
-                drive_msg = AckermannDriveStamped()
-                drive_msg.header.stamp = self.get_clock().now().to_msg()
-                drive_msg.header.frame_id = 'base_link'
-                
-                # Populate all AckermannDrive fields
-                drive_msg.drive.steering_angle = steering
-                drive_msg.drive.steering_angle_velocity = steering_angle_velocity
-                drive_msg.drive.speed = speed
-                drive_msg.drive.acceleration = acceleration
-                drive_msg.drive.jerk = jerk
-                self.drive_pub.publish(drive_msg)
-                
-                # Update QoS statistics for drive commands
-                self.qos_stats['drive_commands_sent'] += 1
-                
-                # Log reset status with phase information
-                status_msg = f"Reset phase: {self.reset_phase} ({self.reset_timer}/{self.reset_duration})"
-                if self.reset_phase == 'align' and self.reset_target_waypoint:
-                    # Calculate orientation error
-                    curr_yaw = self.odom_data['yaw']
-                    target_yaw = self.reset_target_waypoint['yaw']
-                    yaw_error = target_yaw - curr_yaw
-                    yaw_error = np.arctan2(np.sin(yaw_error), np.cos(yaw_error))
-                    status_msg += f", Orientation error: {yaw_error:.3f} rad"
-                status_msg += f", Action: steering={steering:.2f}, speed={speed:.2f}"
-                status_msg += f", Derivatives: accel={acceleration:.2f}, steer_vel={steering_angle_velocity:.2f}, jerk={jerk:.2f}"
-                self.get_logger().debug(status_msg)
+                self._publish_drive_command(steering, speed, f"Reset phase: {self.reset_phase} ({self.reset_timer}/{self.reset_duration})")
                 
                 return
         
@@ -769,22 +776,8 @@ class RLF1TenthController(Node):
         inference_time = time.time() - start_time
         
         # Convert action to drive command
-        drive_msg = AckermannDriveStamped()
-        drive_msg.header.stamp = self.get_clock().now().to_msg()
-        drive_msg.header.frame_id = 'base_link'
-        
-        # Action is [steering, speed]
         steering = float(action[0])
         speed = float(action[1])
-        
-        # Get current timestamp for derivative calculations
-        current_timestamp = time.time()
-        current_velocity = self.odom_data['velocity'] if self.odom_data else 0.0
-        
-        # Calculate enhanced drive message fields
-        acceleration, steering_angle_velocity, jerk = self._calculate_drive_derivatives(
-            steering, speed, current_velocity, current_timestamp
-        )
         
         # Store command in history
         self.command_history.append((steering, speed))
@@ -794,18 +787,8 @@ class RLF1TenthController(Node):
         # Update last steering angle
         self.last_steering_angle = steering
         
-        # Populate all AckermannDrive fields
-        drive_msg.drive.steering_angle = steering
-        drive_msg.drive.steering_angle_velocity = steering_angle_velocity
-        drive_msg.drive.speed = speed
-        drive_msg.drive.acceleration = acceleration
-        drive_msg.drive.jerk = jerk
-        
-        # Publish the drive command
-        self.drive_pub.publish(drive_msg)
-        
-        # Update QoS statistics for drive commands
-        self.qos_stats['drive_commands_sent'] += 1
+        # Send drive command
+        self._publish_drive_command(steering, speed)
         
         # Plot lidar scan only if enabled
         if self.enable_lidar_plot:
@@ -815,7 +798,6 @@ class RLF1TenthController(Node):
         self.get_logger().info(
             f"State: s={obs[0]:.4f}, ey={obs[1]:.4f}, vel={obs[2]:.4f}, yaw={obs[3]:.4f}, " +
             f"Action: steering={steering:.4f}, speed={speed:.4f}, " +
-            f"Derivatives: accel={acceleration:.2f}m/s², steer_vel={steering_angle_velocity:.2f}rad/s, jerk={jerk:.2f}m/s³, " +
             f"Inference time: {inference_time*1000:.2f}ms"
         )
     
@@ -1193,7 +1175,7 @@ class RLF1TenthController(Node):
             self.episode_starts = np.ones((1,), dtype=bool)
             self.get_logger().info("Reset LSTM states")
 
-    def _calculate_drive_derivatives(self, current_steering: float, current_speed: float, 
+    def _calculate_drive_derivatives(self, current_steering: float,
                                    current_velocity: float, current_timestamp: float) -> Tuple[float, float, float]:
         """
         Calculate acceleration, steering angle velocity, and jerk for AckermannDrive message.
