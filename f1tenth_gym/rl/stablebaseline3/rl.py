@@ -1199,7 +1199,7 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
     # Compute statistics from evaluation results
     return compute_statistics(env_episode_rewards, env_episode_lengths, env_lap_times, env_velocities, num_envs)
 
-def initialize_with_imitation_learning(model, env, imitation_policy_type="PURE_PURSUIT", total_transitions=100_000, racing_mode=False, algorithm="SAC"):
+def initialize_with_imitation_learning(model, env, imitation_policy_type="PURE_PURSUIT", total_transitions=1000_000, racing_mode=False, algorithm="SAC"):
     """
     Initialize a reinforcement learning model using imitation learning from a specified policy.
     
@@ -1316,7 +1316,7 @@ def collect_expert_rollouts(model, env, raw_vec_env, expert_policies, total_tran
 
     # Create progress bar for collecting transitions
     with tqdm(total=total_transitions, desc="Collecting Expert Demonstration Rollouts") as pbar:
-        while min(env_transitions_collected) < transitions_per_env - 1000:
+        while min(env_transitions_collected) < transitions_per_env * 0.9:
             # Buffer for current rollouts, one per environment
             current_rollouts = [[] for _ in range(num_envs)]
             current_rollout_rewards = [0.0 for _ in range(num_envs)]
@@ -1637,7 +1637,7 @@ def pretrain_on_policy(model, demonstrations, env):
     )
     
     # Train using behavior cloning
-    n_epochs = max(1, 50_000 // len(all_transitions))  # More epochs for smaller datasets
+    n_epochs = max(1, 1000_000 // len(all_transitions))  # More epochs for smaller datasets
     logging.info(f"Training behavior cloning for {n_epochs} epochs")
     
     bc_trainer.train(
