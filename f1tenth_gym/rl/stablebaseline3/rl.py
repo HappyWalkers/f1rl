@@ -337,7 +337,7 @@ def create_sac(env, seed, include_params_in_obs=True, feature_extractor_name="FI
     )
     return model
 
-def load_model_for_evaluation(model_path, algorithm, model=None):
+def load_model_for_evaluation(model_path, algorithm, model=None, track=None):
     """Loads or returns the model for evaluation based on algorithm type."""
     if algorithm == "WALL_FOLLOW":
         from wall_follow import WallFollowPolicy
@@ -346,11 +346,11 @@ def load_model_for_evaluation(model_path, algorithm, model=None):
     elif algorithm == "PURE_PURSUIT":
         from pure_pursuit import PurePursuitPolicy
         logging.info("Using pure pursuit policy for evaluation")
-        return PurePursuitPolicy()
+        return PurePursuitPolicy(track=track)
     elif algorithm == "LATTICE":
         from lattice_planner import LatticePlannerPolicy
         logging.info("Using lattice planner policy for evaluation")
-        return LatticePlannerPolicy()
+        return LatticePlannerPolicy(track=track)
     elif model is None:
         logging.info(f"Loading {algorithm} model from {model_path}")
         
@@ -1123,7 +1123,7 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
     
     # Initialize track model for expert policies
     track = None
-    if algorithm in ["PURE_PURSUIT", "LATTICE"]:
+    if algorithm in ["WALL_FOLLOW", "PURE_PURSUIT", "LATTICE"]:
         if is_vec_env:
             track = eval_env.get_attr("track", indices=0)[0]
         else:
@@ -1131,11 +1131,9 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
     
         # Update model with track information if needed
         if model is None:
-            model = load_model_for_evaluation(model_path, algorithm)
-            if hasattr(model, 'track') and track is not None:
-                model.track = track
+            model = load_model_for_evaluation(model_path, algorithm, track=track)
     else:
-        model = load_model_for_evaluation(model_path, algorithm, model)
+        model = load_model_for_evaluation(model_path, algorithm, model=model)
     
     # Initialize metrics and trajectory data storage
     env_episode_rewards = [[] for _ in range(num_envs)]
