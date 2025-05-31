@@ -415,6 +415,7 @@ def run_evaluation_episode(eval_env, model, env_idx, is_vec_env, is_recurrent):
     episode_positions = []
     episode_velocities = []
     episode_desired_velocities = []  # New: collect desired velocities from model actions
+    episode_steering_angles = []  # New: collect steering angles from model actions
     
     while not (terminated or truncated):
         if is_vec_env:
@@ -445,6 +446,13 @@ def run_evaluation_episode(eval_env, model, env_idx, is_vec_env, is_recurrent):
             # Fallback for other action formats
             desired_velocity = 0.0
         
+        # Extract steering angle from model action (action[0] is steering angle)
+        if hasattr(action, '__len__') and len(action) > 0:
+            steering_angle = float(action[0])
+        else:
+            # Fallback for scalar actions
+            steering_angle = float(action) if np.isscalar(action) else 0.0
+        
         if is_vec_env:
             obs, reward, terminated, truncated, info = eval_env.env_method(
                 'step', action, indices=[env_idx]
@@ -455,6 +463,7 @@ def run_evaluation_episode(eval_env, model, env_idx, is_vec_env, is_recurrent):
                 episode_positions.append(position)
                 episode_velocities.append(velocity)
                 episode_desired_velocities.append(desired_velocity)
+                episode_steering_angles.append(steering_angle)
             
             obs = np.array([obs])
             if isinstance(eval_env, VecNormalize):
@@ -469,6 +478,7 @@ def run_evaluation_episode(eval_env, model, env_idx, is_vec_env, is_recurrent):
                 episode_positions.append(position)
                 episode_velocities.append(velocity)
                 episode_desired_velocities.append(desired_velocity)
+                episode_steering_angles.append(steering_angle)
         
         if is_recurrent:
             episode_starts = np.zeros((1,), dtype=bool)
@@ -477,7 +487,7 @@ def run_evaluation_episode(eval_env, model, env_idx, is_vec_env, is_recurrent):
         step_count += 1
     
     episode_time = time.time() - episode_start_time
-    return total_reward, step_count, episode_time, episode_positions, episode_velocities, episode_desired_velocities
+    return total_reward, step_count, episode_time, episode_positions, episode_velocities, episode_desired_velocities, episode_steering_angles
 
 def extract_position_velocity(obs, env, agent_idx=0, info=None):
     """Extracts position and velocity data from observation and info."""
@@ -1108,6 +1118,169 @@ def plot_velocity_time_profiles(env_velocities, env_desired_velocities, env_epis
     plt.close('all')
     logging.info(f"Velocity and acceleration vs time profile plots saved to {plot_dir}")
 
+def plot_steering_time_profiles(env_steering_angles, env_episode_lengths, env_params, num_envs, num_episodes, model_path=None, algorithm="SAC"):
+    """Creates and saves steering angle and steering angle velocity vs time profile plots."""
+    # Create output directory
+    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    plot_dir = f"./steering_time_profiles_{timestamp}"
+    
+    if model_path is not None:
+        output_dir = os.path.dirname(model_path) or "."
+        os.makedirs(output_dir, exist_ok=True)
+        plot_dir = os.path.join(output_dir, f"steering_time_profiles_{timestamp}")
+    
+    os.makedirs(plot_dir, exist_ok=True)
+    
+    # Simulation time step (assuming 50Hz update rate)
+    dt = 0.02
+    
+    # Overview plot
+    fig, ax1 = plt.subplots(figsize=(15, 10))
+    ax2 = ax1.twinx()  # Create right axis for steering angle velocity
+    
+    plt.title(f"Steering Angle and Steering Velocity vs Time Profiles Overview - {algorithm} Algorithm")
+    ax1.set_xlabel('Time (s)')
+    ax1.set_ylabel('Steering Angle (rad)', color='blue')
+    ax2.set_ylabel('Steering Velocity (rad/s)', color='red')
+    
+    env_colors = plt.cm.tab10(np.linspace(0, 1, num_envs))
+    legend_patches = []
+    
+    for env_idx in range(num_envs):
+        if len(env_steering_angles[env_idx]) == 0:
+            continue
+        
+        steering_angles = np.array(env_steering_angles[env_idx])
+        time_points = np.arange(len(steering_angles)) * dt
+        
+        # Calculate steering angle velocity (derivative of steering angle)
+        steering_velocities = np.zeros_like(steering_angles)
+        if len(steering_angles) > 1:
+            steering_velocities[1:] = np.diff(steering_angles) / dt
+            # # Apply reasonable limits to avoid numerical issues
+            # steering_velocities = np.clip(steering_velocities, -50, 50)  # rad/s limits
+        
+        # Individual environment plot
+        fig_ind, ax1_ind = plt.subplots(figsize=(12, 8))
+        ax2_ind = ax1_ind.twinx()
+        
+        # Format parameter string
+        param_string = ""
+        if env_params[env_idx] is not None:
+            param_info = []
+            for key, value in env_params[env_idx].items():
+                if key in ["mu", "C_Sf", "C_Sr", "m", "I", "lidar_noise_stddev"]:
+                    param_info.append(f"{key}={value:.3f}")
+            if param_info:
+                param_string = ", ".join(param_info)
+        
+        plot_title = f"Steering Angle and Steering Velocity vs Time - Env {env_idx+1}/{num_envs}"
+        if param_string:
+            plot_title += f" ({param_string})"
+        
+        # Plot steering angle and steering velocity
+        line1 = ax1_ind.plot(time_points, steering_angles, 'b-', linewidth=1.5, alpha=0.8, label='Steering Angle')
+        line2 = ax2_ind.plot(time_points, steering_velocities, 'r-', linewidth=1.5, alpha=0.7, label='Steering Velocity')
+        
+        # Add episode boundaries if we have episode length data
+        if env_idx < len(env_episode_lengths) and len(env_episode_lengths[env_idx]) > 0:
+            episode_lengths = env_episode_lengths[env_idx]
+            current_time = 0
+            for episode_num, episode_length in enumerate(episode_lengths):
+                episode_end_time = current_time + episode_length * dt
+                if episode_num < len(episode_lengths) - 1:  # Don't draw line after last episode
+                    ax1_ind.axvline(x=episode_end_time, color='gray', linestyle='--', alpha=0.6, linewidth=1)
+                current_time = episode_end_time
+        
+        ax1_ind.set_xlabel('Time (s)')
+        ax1_ind.set_ylabel('Steering Angle (rad)', color='blue')
+        ax2_ind.set_ylabel('Steering Velocity (rad/s)', color='red')
+        ax1_ind.set_title(plot_title)
+        ax1_ind.grid(True, alpha=0.3)
+        
+        # Color the y-axis labels
+        ax1_ind.tick_params(axis='y', labelcolor='blue')
+        ax2_ind.tick_params(axis='y', labelcolor='red')
+        
+        # Add combined legend
+        lines = line1 + line2
+        labels = [l.get_label() for l in lines]
+        ax1_ind.legend(lines, labels, loc='upper right')
+        
+        # Add statistics text
+        if len(steering_angles) > 0 and len(steering_velocities) > 0:
+            mean_steering = np.mean(steering_angles)
+            max_steering = np.max(steering_angles)
+            min_steering = np.min(steering_angles)
+            std_steering = np.std(steering_angles)
+            
+            mean_steering_vel = np.mean(steering_velocities)
+            max_steering_vel = np.max(steering_velocities)
+            min_steering_vel = np.min(steering_velocities)
+            std_steering_vel = np.std(steering_velocities)
+            
+            # Convert radians to degrees for more intuitive reading
+            mean_steering_deg = np.degrees(mean_steering)
+            max_steering_deg = np.degrees(max_steering)
+            min_steering_deg = np.degrees(min_steering)
+            std_steering_deg = np.degrees(std_steering)
+            
+            mean_steering_vel_deg = np.degrees(mean_steering_vel)
+            max_steering_vel_deg = np.degrees(max_steering_vel)
+            min_steering_vel_deg = np.degrees(min_steering_vel)
+            std_steering_vel_deg = np.degrees(std_steering_vel)
+            
+            stats_text = (f'Steering Angle:\n'
+                         f'  Mean: {mean_steering:.3f} rad ({mean_steering_deg:.1f}°)\n'
+                         f'  Max: {max_steering:.3f} rad ({max_steering_deg:.1f}°)\n'
+                         f'  Min: {min_steering:.3f} rad ({min_steering_deg:.1f}°)\n'
+                         f'  Std: {std_steering:.3f} rad ({std_steering_deg:.1f}°)\n\n'
+                         f'Steering Velocity:\n'
+                         f'  Mean: {mean_steering_vel:.3f} rad/s ({mean_steering_vel_deg:.1f}°/s)\n'
+                         f'  Max: {max_steering_vel:.3f} rad/s ({max_steering_vel_deg:.1f}°/s)\n'
+                         f'  Min: {min_steering_vel:.3f} rad/s ({min_steering_vel_deg:.1f}°/s)\n'
+                         f'  Std: {std_steering_vel:.3f} rad/s ({std_steering_vel_deg:.1f}°/s)')
+            ax1_ind.text(0.02, 0.98, stats_text, transform=ax1_ind.transAxes, 
+                        verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
+                        fontsize=8)
+        
+        env_plot_filename = os.path.join(plot_dir, f"steering_time_env_{env_idx+1}.png")
+        plt.savefig(env_plot_filename, dpi=300, bbox_inches='tight')
+        plt.close(fig_ind)
+        
+        # Add to overview plot
+        ax1.plot(time_points, steering_angles, color=env_colors[env_idx], linewidth=1.5, alpha=0.7, linestyle='-')
+        ax2.plot(time_points, steering_velocities, color=env_colors[env_idx], linewidth=1.5, alpha=0.7, linestyle='--')
+        
+        legend_label = f"Env {env_idx+1}"
+        if param_string:
+            # Truncate long parameter strings for legend
+            if len(param_string) > 50:
+                param_string = param_string[:47] + "..."
+            legend_label += f" ({param_string})"
+        legend_patches.append(mpatches.Patch(color=env_colors[env_idx], label=legend_label))
+    
+    # Finalize overview plot
+    if legend_patches:
+        ax1.grid(True, alpha=0.3)
+        ax1.tick_params(axis='y', labelcolor='blue')
+        ax2.tick_params(axis='y', labelcolor='red')
+        
+        # Add custom legend explaining the line styles
+        from matplotlib.lines import Line2D
+        legend_elements = [
+            Line2D([0], [0], color='blue', lw=2, label='Steering Angle (solid line)'),
+            Line2D([0], [0], color='red', lw=2, linestyle='--', label='Steering Velocity (dashed line)')
+        ]
+        legend_elements.extend(legend_patches)
+        ax1.legend(handles=legend_elements, loc='upper right', bbox_to_anchor=(1.15, 1))
+        
+        overview_filename = os.path.join(plot_dir, "steering_time_overview.png")
+        plt.savefig(overview_filename, dpi=300, bbox_inches='tight')
+    
+    plt.close('all')
+    logging.info(f"Steering angle vs time profile plots saved to {plot_dir}")
+
 def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm="SAC", num_episodes=5, model=None, racing_mode=False, vecnorm_path=None):
     """
     Evaluates a trained model or wall-following policy on the environment.
@@ -1142,6 +1315,7 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
     env_positions = [[] for _ in range(num_envs)]
     env_velocities = [[] for _ in range(num_envs)]
     env_desired_velocities = [[] for _ in range(num_envs)]  # New: store desired velocities
+    env_steering_angles = [[] for _ in range(num_envs)]  # New: store steering angles
     env_params = [None for _ in range(num_envs)]
     
     is_recurrent = algorithm == "RECURRENT_PPO" or (hasattr(model, 'policy') and hasattr(model.policy, '_initial_state'))
@@ -1154,7 +1328,7 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
             logging.info(f"Starting evaluation episode {episode+1}/{num_episodes} on env {env_idx+1}")
             
             # Run a single evaluation episode
-            total_reward, step_count, episode_time, episode_positions, episode_velocities, episode_desired_velocities = run_evaluation_episode(
+            total_reward, step_count, episode_time, episode_positions, episode_velocities, episode_desired_velocities, episode_steering_angles = run_evaluation_episode(
                 eval_env, model, env_idx, is_vec_env, is_recurrent
             )
             
@@ -1168,6 +1342,7 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
                 env_positions[env_idx].extend(episode_positions)
                 env_velocities[env_idx].extend(episode_velocities)
                 env_desired_velocities[env_idx].extend(episode_desired_velocities)
+                env_steering_angles[env_idx].extend(episode_steering_angles)
             
             logging.info(f"Episode {episode+1} finished:")
             logging.info(f"  Reward: {total_reward:.2f}")
@@ -1193,6 +1368,12 @@ def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm=
             plot_velocity_time_profiles(env_velocities, env_desired_velocities, env_episode_lengths, env_params, num_envs, num_episodes, model_path, algorithm)
         except Exception as e:
             logging.error(f"Error generating velocity vs time profile plots: {e}")
+        
+        # Plot steering angle vs time profiles
+        try:
+            plot_steering_time_profiles(env_steering_angles, env_episode_lengths, env_params, num_envs, num_episodes, model_path, algorithm)
+        except Exception as e:
+            logging.error(f"Error generating steering angle vs time profile plots: {e}")
     
     # Compute statistics from evaluation results
     return compute_statistics(env_episode_rewards, env_episode_lengths, env_lap_times, env_velocities, num_envs)
