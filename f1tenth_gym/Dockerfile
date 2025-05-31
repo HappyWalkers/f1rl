@@ -45,16 +45,26 @@ RUN apt-get update --fix-missing && \
 RUN pip3 install PyOpenGL \
                  PyOpenGL_accelerate
 
-# ────────── Python packages that don’t cause trouble ──────────
+# ────────── Python packages that don't cause trouble ──────────
 RUN python3 -m pip install --no-cache-dir --upgrade "pip<24" && \
     python3 -m pip install --no-cache-dir PyOpenGL PyOpenGL_accelerate
 
 RUN mkdir /f1tenth_gym
+
+# Copy requirements first for better Docker layer caching
+COPY requirements.txt /f1tenth_gym/requirements.txt
+
+# Install Python packages from requirements
+RUN cd /f1tenth_gym && \
+    pip3 install --no-cache-dir -r requirements.txt
+
+# Copy the rest of the code
 COPY . /f1tenth_gym
 
+# Install f1tenth_gym in development mode
 RUN cd /f1tenth_gym && \
     pip3 install -e .
 
 WORKDIR /f1tenth_gym
 
-ENTRYPOINT ["/bin/bash"]
+CMD ["/bin/bash"]

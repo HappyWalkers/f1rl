@@ -4,3 +4,7 @@ __pycache__/
 logs/
 *tensorboard*
 *.h5
+wandb/
+*.png
+*.pth
+rl/traj_to_params/data
