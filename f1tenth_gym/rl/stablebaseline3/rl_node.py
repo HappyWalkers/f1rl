@@ -271,7 +271,7 @@ class RLF1TenthController(Node):
         )
         
         # Create a timer for control loop
-        self.timer = self.create_timer(0.02, self.control_loop)
+        self.timer = self.create_timer(self.control_loop_dt, self.control_loop)
         
         # QoS monitoring and statistics
         self._setup_qos_monitoring()
