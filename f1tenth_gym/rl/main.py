@@ -26,6 +26,7 @@ from utils.Track import Track
 from utils import utils
 from matplotlib import pyplot as plt
 from PIL import Image
+import wandb
 
 FLAGS = flags.FLAGS
 
@@ -49,6 +50,11 @@ flags.DEFINE_string("vecnorm_path", "./logs/best_model/vec_normalize.pkl", "Path
 flags.DEFINE_enum("algorithm", "RECURRENT_PPO", ["SAC", "PPO", "RECURRENT_PPO", "DDPG", "TD3", "WALL_FOLLOW", "PURE_PURSUIT", "LATTICE"], "Algorithm used")
 flags.DEFINE_enum("feature_extractor", "RESNET", ["MLP", "RESNET", "FILM", "TRANSFORMER", "MOE"], "Feature extractor architecture to use")
 
+# WandB flags
+flags.DEFINE_boolean("use_wandb", True, "Whether to use Weights & Biases for experiment tracking")
+flags.DEFINE_string("wandb_run_name", None, "WandB run name. Required when use_wandb=True.")
+flags.DEFINE_string("wandb_notes", "", "Notes for the WandB run")
+flags.DEFINE_enum("wandb_mode", "online", ["online", "offline", "disabled"], "WandB mode")
 
 os.environ['F110GYM_PLOT_SCALE'] = str(60.)
 
@@ -71,6 +77,76 @@ def test_env(env):
             action, metric = gap_follower.planning(obs)
             obs, step_reward, done, info = env.step(action)
         print('finish one episode')
+
+
+def setup_wandb_config():
+    """Setup WandB configuration from FLAGS"""
+    config = {
+        # Training hyperparameters
+        "algorithm": FLAGS.algorithm,
+        "feature_extractor": FLAGS.feature_extractor,
+        "num_envs": FLAGS.num_envs,
+        "num_param_cmbs": FLAGS.num_param_cmbs,
+        "seed": FLAGS.seed,
+        "map_index": FLAGS.map_index,
+        
+        # Environment settings
+        "racing_mode": FLAGS.racing_mode,
+        "num_agents": FLAGS.num_agents,
+        "use_dr": FLAGS.use_dr,
+        "include_params_in_obs": FLAGS.include_params_in_obs,
+        "lidar_scan_in_obs_mode": FLAGS.lidar_scan_in_obs_mode,
+        
+        # Imitation learning
+        "use_il": FLAGS.use_il,
+        "il_policy": FLAGS.il_policy,
+        
+        # Evaluation
+        "num_eval_episodes": FLAGS.num_eval_episodes,
+        
+        # System
+        "logging_level": FLAGS.logging_level,
+    }
+    return config
+
+
+def initialize_wandb():
+    """Initialize WandB with configuration"""
+    if not FLAGS.use_wandb or FLAGS.wandb_mode == "disabled":
+        return None
+    
+    # Require run name when wandb is enabled
+    if FLAGS.wandb_run_name is None:
+        raise ValueError("wandb_run_name is required when use_wandb=True. Please specify --wandb_run_name.")
+    
+    # Initialize wandb
+    run = wandb.init(
+        project="f1tenth-rl",
+        entity=None,  # Use default entity
+        name=FLAGS.wandb_run_name,
+        config=setup_wandb_config(),
+        notes=FLAGS.wandb_notes,
+        mode=FLAGS.wandb_mode,
+        sync_tensorboard=True,  # Sync tensorboard logs if available
+    )
+    
+    logging.info(f"Initialized WandB run: {run.name} (ID: {run.id})")
+    logging.info(f"WandB URL: {run.url}")
+    
+    return run
+
+def wandb_run_main(argv):
+    # Initialize WandB
+    wandb_run = None
+    if FLAGS.use_wandb and not FLAGS.eval:
+        wandb_run = initialize_wandb()
+    
+    try:
+        main(argv)
+    finally:
+        # Clean up WandB
+        if wandb_run:
+            wandb.finish()
 
 
 def main(argv):
@@ -152,4 +228,4 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    app.run(main)
+    app.run(wandb_run_main)
