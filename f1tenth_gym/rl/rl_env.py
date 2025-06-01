@@ -289,10 +289,10 @@ class F110GymWrapper(gymnasium.Env):
             noise = self.np_random.normal(0, self.lidar_noise_stddev, lidar_scan.shape)
             lidar_scan += noise * lidar_scan
             
-            # Then randomly mask out some values to zero
-            mask_probability = self.lidar_noise_stddev
-            mask = self.np_random.random(lidar_scan.shape) < mask_probability
-            lidar_scan[mask] = 0.0
+            # # Then randomly mask out some values to zero
+            # mask_probability = self.lidar_noise_stddev
+            # mask = self.np_random.random(lidar_scan.shape) < mask_probability
+            # lidar_scan[mask] = 0.0
             
             # Clip values to valid range
             lidar_scan = np.clip(lidar_scan, 0, 30.0) # Assuming max range is 30
@@ -570,13 +570,13 @@ class F110GymWrapper(gymnasium.Env):
                      steering_speed_punishment * 0.01)
         else:
             # Original reward function for single-agent with added punishments
-            reward = (progress_reward * 10 + 
+            reward = (progress_reward * 20 + 
                      safety_distance_reward * 0 + 
                      linear_velocity_reward * 1 + 
                      collision_punishment * 1000 + 
                      angular_velocity_punishment * 0 +
-                     acceleration_punishment * 0.01 +
-                     steering_speed_punishment * 0.01)
+                     acceleration_punishment * 0 +
+                     steering_speed_punishment * 0.05)
         
         logging.debug(f"step: {self.current_step}")
         logging.debug(f"linear velocity: {linear_velocity:.2f}")
