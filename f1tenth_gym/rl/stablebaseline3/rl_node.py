@@ -1331,7 +1331,7 @@ def main(args=None):
                         help='Index of the map to use')
     parser.add_argument('--map_dir', type=str, default='./f1tenth_racetracks/',
                         help='Directory containing the track maps')
-    parser.add_argument('--lidar_scan_in_obs_mode', type=str, default='FULL', choices=['FULL', 'NONE', 'DOWNSAMPLED'],
+    parser.add_argument('--lidar_scan_in_obs_mode', type=str, default='DOWNSAMPLED', choices=['FULL', 'NONE', 'DOWNSAMPLED'],
                         help='Mode for including lidar scans in observations')
     parser.add_argument('--enable_lidar_plot', action='store_true', default=False,
                         help='Enable lidar visualization plots')

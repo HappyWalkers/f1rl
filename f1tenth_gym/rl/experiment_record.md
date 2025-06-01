@@ -1,14 +1,4 @@
-# F1RL
-
-## Todo List
-* put acceleration & steering angle velocity into reward
-* speed profile, collision rate
-* Auxiliary prediction head that reconstructs the physical parameters accelerates utilisation of context.
-* Analyse gradients – verify that ∂π/∂μ is non‑zero; if it vanishes, the architecture or loss needs adjustment.
-* multiple expert policy for IL
-* use a special loss to force the network to learn different behaviors in different envs
-
-## Experiment record:
+# Experiment Record:
 
 * Trained SAC agent achieves 16 s/lap in levine in simulation. When deployed, it achieves 30 s/lap. It exceeds our expectation because it didn't go through any fine tuning on the real car.
 
