@@ -1,6 +1,9 @@
 import numpy as np
 import time
 from absl import logging
+from absl import flags
+
+FLAGS = flags.FLAGS
 
 class WallFollowPolicy:
     """
@@ -25,25 +28,61 @@ class WallFollowPolicy:
         self.angle_increment = 0.00435  # From LiDAR configuration
         self.looking_ahead_distance = 1.0  # Look-ahead for smoother control
         
-        logging.info("Wall following policy initialized")
+        # Get lidar mode from FLAGS if available, otherwise default to FULL
+        try:
+            self.lidar_mode = FLAGS.lidar_scan_in_obs_mode
+        except:
+            self.lidar_mode = "FULL"  # Default fallback
+            
+        # Calculate expected observation dimensions
+        self.state_dim = 4  # [s, ey, vel, yaw_angle]
+        if self.lidar_mode == "NONE":
+            self.lidar_dim = 0
+        elif self.lidar_mode == "FULL":
+            self.lidar_dim = 1080
+        elif self.lidar_mode == "DOWNSAMPLED":
+            self.lidar_dim = 108
+        else:
+            logging.warning(f"Unknown lidar mode: {self.lidar_mode}, defaulting to FULL")
+            self.lidar_mode = "FULL"
+            self.lidar_dim = 1080
+            
+        # Check if parameters are included in observation
+        try:
+            self.include_params = FLAGS.include_params_in_obs
+            self.param_dim = 12 if self.include_params else 0
+        except:
+            self.include_params = False
+            self.param_dim = 0
+        
+        logging.info(f"Wall following policy initialized with lidar_mode={self.lidar_mode}, "
+                    f"lidar_dim={self.lidar_dim}, include_params={self.include_params}")
         
     def predict(self, observation, deterministic=True):
         """
         Implements the predict interface expected by the evaluate function
         
         Args:
-            observation: The environment observation (speed, yaw, lidar scan)
+            observation: The environment observation [s, ey, vel, yaw_angle, lidar_data, params]
             deterministic: Whether to use deterministic actions (ignored in wall following)
             
         Returns:
             action: [steering, speed] action
             _: None (to match the RL policy interface)
         """
-        # Extract lidar data (the last 1080 elements of observation)
-        lidar_scan = observation[-1080:]
+        # Parse observation components
+        obs_components = self._parse_observation(observation)
         
-        # Get velocity from observation for adaptive speed control
-        current_velocity = observation[0]
+        # Extract velocity for adaptive speed control
+        current_velocity = obs_components['velocity']
+        
+        # Get lidar data if available
+        lidar_scan = obs_components['lidar_scan']
+        
+        if lidar_scan is None or len(lidar_scan) == 0:
+            logging.warning("No LiDAR data available for wall following. Using default behavior.")
+            # Default behavior when no lidar: straight line with moderate speed
+            return np.array([0.0, 3.0]), None
         
         # Calculate error to the wall
         error = self.get_error(lidar_scan)
@@ -68,6 +107,53 @@ class WallFollowPolicy:
         speed = self.adaptive_velocity(error, steering)
         
         return np.array([steering, speed]), None
+    
+    def _parse_observation(self, observation):
+        """
+        Parse the observation array into its components based on the environment configuration.
+        
+        Args:
+            observation: Full observation array from the environment
+            
+        Returns:
+            dict: Dictionary containing parsed observation components
+        """
+        obs_dict = {
+            's': observation[0],           # Frenet arc length
+            'ey': observation[1],          # Lateral deviation
+            'velocity': observation[2],    # Velocity
+            'yaw_angle': observation[3],   # Yaw angle
+            'lidar_scan': None,           # Will be filled if available
+            'params': None                # Will be filled if available
+        }
+        
+        # Extract lidar data if present
+        lidar_start_idx = self.state_dim
+        lidar_end_idx = lidar_start_idx + self.lidar_dim
+        
+        if self.lidar_dim > 0 and len(observation) >= lidar_end_idx:
+            lidar_data = observation[lidar_start_idx:lidar_end_idx]
+            
+            # Convert back to full resolution if downsampled for wall following algorithm
+            if self.lidar_mode == "DOWNSAMPLED":
+                # Interpolate to approximate full resolution for better wall following
+                full_lidar = np.zeros(1080)
+                for i in range(len(lidar_data)):
+                    # Fill in 10 consecutive points with the same value
+                    start_idx = i * 10
+                    end_idx = min(start_idx + 10, 1080)
+                    full_lidar[start_idx:end_idx] = lidar_data[i]
+                obs_dict['lidar_scan'] = full_lidar
+            else:
+                obs_dict['lidar_scan'] = lidar_data
+        
+        # Extract parameters if present
+        if self.param_dim > 0 and len(observation) >= lidar_end_idx + self.param_dim:
+            param_start_idx = lidar_end_idx
+            param_end_idx = param_start_idx + self.param_dim
+            obs_dict['params'] = observation[param_start_idx:param_end_idx]
+        
+        return obs_dict
     
     def get_range(self, ranges, angle):
         """
