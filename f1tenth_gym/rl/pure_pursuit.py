@@ -24,7 +24,7 @@ class PurePursuitPolicy:
         Implements the predict interface expected by the evaluate function
         
         Args:
-            observation: The environment observation [s, ey, vel, yaw_angle, yaw_rate, lidar_scan, env_params(optional)]
+            observation: The environment observation [s, ey, vel, yaw_angle, lidar_scan, env_params(optional)]
             deterministic: Whether to use deterministic actions (ignored in pure pursuit)
             
         Returns:

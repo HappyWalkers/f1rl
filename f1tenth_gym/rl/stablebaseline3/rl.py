@@ -378,7 +378,7 @@ def load_model_for_evaluation(model_path, algorithm, model=None, track=None):
     elif algorithm == "LATTICE":
         from lattice_planner import LatticePlannerPolicy
         logging.info("Using lattice planner policy for evaluation")
-        return LatticePlannerPolicy(track=track)
+        return LatticePlannerPolicy(track=track, lidar_scan_in_obs_mode=FLAGS.lidar_scan_in_obs_mode)
     elif model is None:
         logging.info(f"Loading {algorithm} model from {model_path}")
         
@@ -1509,7 +1509,7 @@ def initialize_expert_policies(vec_env, imitation_policy_type, racing_mode):
         elif imitation_policy_type == "LATTICE":
             if not racing_mode:
                 logging.warning("LATTICE planner is designed for racing mode. Using it in non-racing mode may not be optimal.")
-            expert_policies.append(LatticePlannerPolicy(track=track))
+            expert_policies.append(LatticePlannerPolicy(track=track, lidar_scan_in_obs_mode=FLAGS.lidar_scan_in_obs_mode))
         else:
             raise ValueError(f"Unsupported imitation_policy_type: {imitation_policy_type}")
     

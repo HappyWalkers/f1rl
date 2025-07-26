@@ -8,12 +8,25 @@ class LatticePlannerPolicy:
     Generates multiple potential trajectories (lattice) and selects the optimal one.
     Designed to handle overtaking scenarios in racing.
     """
-    def __init__(self, track: Track, num_trajectories=10, planning_horizon=10.0):
+    def __init__(self, track: Track, num_trajectories=10, planning_horizon=10.0, lidar_scan_in_obs_mode="FULL"):
         # Configuration
         self.track = track
         self.num_trajectories = num_trajectories  # Number of lateral trajectories to consider
         self.planning_horizon = planning_horizon  # How far ahead to plan in s coordinate
         self.planning_resolution = 30
+        
+        # Lidar configuration
+        self.lidar_scan_in_obs_mode = lidar_scan_in_obs_mode
+        
+        # Calculate expected lidar dimension based on mode
+        if self.lidar_scan_in_obs_mode == "NONE":
+            self.lidar_dim = 0
+        elif self.lidar_scan_in_obs_mode == "FULL":
+            self.lidar_dim = 1080
+        elif self.lidar_scan_in_obs_mode == "DOWNSAMPLED":
+            self.lidar_dim = 108
+        else:
+            raise ValueError(f"Unknown lidar_scan_in_obs_mode: {self.lidar_scan_in_obs_mode}")
         
         # Trajectory parameters
         self.lateral_offsets = np.linspace(-2, 2, num_trajectories)  # Lateral offset options
@@ -34,7 +47,7 @@ class LatticePlannerPolicy:
         self.w_obstacle = 5.0   # Weight for obstacle avoidance (higher is safer)
         self.w_smoothness = 1.0 # Weight for trajectory smoothness
         
-        logging.info(f"Lattice Planner initialized with {num_trajectories} trajectory options")
+        logging.info(f"Lattice Planner initialized with {num_trajectories} trajectory options and lidar mode: {self.lidar_scan_in_obs_mode}")
     
     def predict(self, observation, deterministic=True):
         """
@@ -48,17 +61,23 @@ class LatticePlannerPolicy:
             action: [steering, speed] action
             _: None (to match the RL policy interface)
         """
-        # Extract state from observation
+        # Extract state from observation (first 4 components are always state)
         current_s = observation[0]
         current_ey = observation[1]
         current_vel = observation[2]
         current_yaw = observation[3]
         
-        # Extract lidar scan (starts at index 4, length 1080)
-        lidar_scan = observation[4:1084]
-        
-        # Detect obstacles using lidar
-        obstacles = self._detect_opponent(lidar_scan)
+        # Extract lidar scan based on mode
+        obstacles = []
+        if self.lidar_dim > 0:
+            # Lidar scan starts at index 4 and has self.lidar_dim points
+            lidar_scan = observation[4:4+self.lidar_dim]
+            
+            # Detect obstacles using lidar
+            obstacles = self._detect_opponent(lidar_scan)
+        else:
+            # No lidar data available
+            logging.debug("No lidar data available for obstacle detection")
         
         # Generate candidate trajectories
         trajectories = self._generate_trajectories(current_s, current_ey, current_vel, current_yaw)
@@ -91,15 +110,22 @@ class LatticePlannerPolicy:
         Detect multiple obstacles using lidar scan in all directions
         
         Args:
-            lidar_scan: 1080 length lidar scan
+            lidar_scan: lidar scan with length based on lidar_scan_in_obs_mode
             
         Returns:
             obstacles: List of detected obstacles, each with [distance, angle, estimated_s, estimated_ey]
         """
-        angle_inc = 1.5 * np.pi / len(lidar_scan)
+        # Handle different lidar scan modes
+        if self.lidar_scan_in_obs_mode == "NONE":
+            return []
+        
+        # Calculate angle increment based on actual lidar scan length
+        # Full lidar covers 270 degrees (-135 to +135 degrees)
+        total_angle_range = 1.5 * np.pi  # 270 degrees in radians
+        angle_inc = total_angle_range / len(lidar_scan)
         angles = np.arange(len(lidar_scan)) * angle_inc - 0.75 * np.pi
         
-        # Filter points based on wider view angle (180 degrees)
+        # Filter points based on view angle
         view_indices = np.where(np.abs(angles) < self.obstacle_view_angle)[0]
         view_scan = lidar_scan[view_indices]
         view_angles = angles[view_indices]
