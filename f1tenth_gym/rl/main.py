@@ -192,39 +192,13 @@ def main(argv):
     # We use the same env creation function as training for consistency
     vec_env = stablebaseline3.rl.create_vec_env(
         env_kwargs=base_env_kwargs,
-        seed=FLAGS.seed,
-        num_envs=FLAGS.num_envs,
-        num_param_cmbs=FLAGS.num_param_cmbs,
-        use_domain_randomization=FLAGS.use_dr,
-        include_params_in_obs=FLAGS.include_params_in_obs,
-        racing_mode=FLAGS.racing_mode,
-        lidar_scan_in_obs_mode=FLAGS.lidar_scan_in_obs_mode
+        seed=FLAGS.seed
     )
     if FLAGS.eval:
-        stablebaseline3.rl.evaluate(
-            eval_env=vec_env,
-            model_path=FLAGS.model_path,
-            algorithm=FLAGS.algorithm,
-            num_episodes=FLAGS.num_eval_episodes,
-            racing_mode=FLAGS.racing_mode,
-            vecnorm_path=FLAGS.vecnorm_path
-        )
+        stablebaseline3.rl.evaluate(eval_env=vec_env)
     else:
         # Train with vectorized environments
-        stablebaseline3.rl.train(
-            env=vec_env,
-            seed=FLAGS.seed,
-            num_envs=FLAGS.num_envs,
-            num_param_cmbs=FLAGS.num_param_cmbs,
-            use_domain_randomization=FLAGS.use_dr,
-            use_imitation_learning=FLAGS.use_il,
-            imitation_policy_type=FLAGS.il_policy,
-            algorithm=FLAGS.algorithm,
-            include_params_in_obs=FLAGS.include_params_in_obs,
-            racing_mode=FLAGS.racing_mode,
-            feature_extractor_name=FLAGS.feature_extractor,
-            lidar_scan_in_obs_mode=FLAGS.lidar_scan_in_obs_mode
-        )
+        stablebaseline3.rl.train(env=vec_env, seed=FLAGS.seed)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 from stable_baselines3 import PPO, DDPG, DQN, TD3, SAC
 from sb3_contrib import RecurrentPPO
 from absl import logging
+from absl import flags
 from stable_baselines3.common.callbacks import EvalCallback
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
@@ -26,6 +27,8 @@ from imitation.data.rollout import flatten_trajectories
 
 import torch
 
+FLAGS = flags.FLAGS
+
 # Function to select feature extractor based on name
 def get_feature_extractor_class(feature_extractor_name):
     """Returns the appropriate feature extractor class based on the name."""
@@ -43,8 +46,13 @@ def get_feature_extractor_class(feature_extractor_name):
         logging.warning(f"Unknown feature extractor: {feature_extractor_name}, defaulting to FILM")
         return F1TenthFeaturesExtractor
 
-def create_ppo(env, seed, include_params_in_obs=True, feature_extractor_name="FILM", lidar_scan_in_obs_mode="FULL"):
+def create_ppo(env, seed):
     """Create a PPO model with custom neural network architecture"""
+    # Read parameters from FLAGS
+    include_params_in_obs = FLAGS.include_params_in_obs
+    feature_extractor_name = FLAGS.feature_extractor
+    lidar_scan_in_obs_mode = FLAGS.lidar_scan_in_obs_mode
+    
     # Determine if the environment observation includes parameters
     obs_dim = env.observation_space.shape[0]
     
@@ -108,8 +116,13 @@ def create_ppo(env, seed, include_params_in_obs=True, feature_extractor_name="FI
     )
     return model
 
-def create_recurrent_ppo(env, seed, include_params_in_obs=False, feature_extractor_name="FILM", lidar_scan_in_obs_mode="FULL"):
+def create_recurrent_ppo(env, seed):
     """Create a RecurrentPPO model with LSTM policy architecture"""
+    # Read parameters from FLAGS
+    include_params_in_obs = FLAGS.include_params_in_obs
+    feature_extractor_name = FLAGS.feature_extractor
+    lidar_scan_in_obs_mode = FLAGS.lidar_scan_in_obs_mode
+    
     # Determine if the environment observation includes parameters
     obs_dim = env.observation_space.shape[0]
     
@@ -173,8 +186,13 @@ def create_recurrent_ppo(env, seed, include_params_in_obs=False, feature_extract
     )
     return model
 
-def create_ddpg(env, seed, include_params_in_obs=True, feature_extractor_name="FILM", lidar_scan_in_obs_mode="FULL"):
+def create_ddpg(env, seed):
     """Create a DDPG model with custom neural network architecture"""
+    # Read parameters from FLAGS
+    include_params_in_obs = FLAGS.include_params_in_obs
+    feature_extractor_name = FLAGS.feature_extractor
+    lidar_scan_in_obs_mode = FLAGS.lidar_scan_in_obs_mode
+    
     # Determine if the environment observation includes parameters
     obs_dim = env.observation_space.shape[0]
     
@@ -224,8 +242,13 @@ def create_ddpg(env, seed, include_params_in_obs=True, feature_extractor_name="F
     )
     return model
 
-def create_td3(env, seed, include_params_in_obs=True, feature_extractor_name="FILM", lidar_scan_in_obs_mode="FULL"):
+def create_td3(env, seed):
     """Create a TD3 model with custom neural network architecture"""
+    # Read parameters from FLAGS
+    include_params_in_obs = FLAGS.include_params_in_obs
+    feature_extractor_name = FLAGS.feature_extractor
+    lidar_scan_in_obs_mode = FLAGS.lidar_scan_in_obs_mode
+    
     # Determine if the environment observation includes parameters
     obs_dim = env.observation_space.shape[0]
     
@@ -275,8 +298,13 @@ def create_td3(env, seed, include_params_in_obs=True, feature_extractor_name="FI
     )
     return model
 
-def create_sac(env, seed, include_params_in_obs=True, feature_extractor_name="FILM", lidar_scan_in_obs_mode="FULL"):
+def create_sac(env, seed):
     """Create a SAC model with custom neural network architecture"""
+    # Read parameters from FLAGS
+    include_params_in_obs = FLAGS.include_params_in_obs
+    feature_extractor_name = FLAGS.feature_extractor
+    lidar_scan_in_obs_mode = FLAGS.lidar_scan_in_obs_mode
+    
     # Get the appropriate feature extractor class
     features_extractor_class = get_feature_extractor_class(feature_extractor_name)
     
@@ -1281,10 +1309,30 @@ def plot_steering_time_profiles(env_steering_angles, env_episode_lengths, env_pa
     plt.close('all')
     logging.info(f"Steering angle vs time profile plots saved to {plot_dir}")
 
-def evaluate(eval_env, model_path="./logs/best_model/best_model.zip", algorithm="SAC", num_episodes=5, model=None, racing_mode=False, vecnorm_path=None):
+def evaluate(eval_env, model_path=None, model=None, vecnorm_path=None):
     """
     Evaluates a trained model or wall-following policy on the environment.
+    
+    Args:
+        eval_env: Environment for evaluation.
+        model_path (str): Path to the model file (optional, read from FLAGS if None).
+        model: Pre-loaded model (optional).
+        vecnorm_path (str): Path to VecNormalize statistics file (optional, read from FLAGS if None).
+        
+    Note:
+        Other parameters are read from FLAGS singleton.
     """
+    # Read parameters from FLAGS
+    algorithm = FLAGS.algorithm
+    num_episodes = FLAGS.num_eval_episodes
+    racing_mode = FLAGS.racing_mode
+    
+    # Set default paths from FLAGS if not provided
+    if model_path is None:
+        model_path = FLAGS.model_path
+    if vecnorm_path is None:
+        vecnorm_path = FLAGS.vecnorm_path
+    
     if racing_mode:
         logging.info("Evaluating in racing mode with two cars")
         eval_env.racing_mode = racing_mode
@@ -1891,26 +1939,30 @@ def make_env(env_id, rank, seed=0, env_kwargs=None):
     # set_global_seeds(seed) # Deprecated in SB3
     return _init
 
-def create_vec_env(env_kwargs, seed, num_envs=1, num_param_cmbs=None, use_domain_randomization=False, include_params_in_obs=True, racing_mode=False, normalize_obs=True, normalize_reward=True, lidar_scan_in_obs_mode="FULL"):
+def create_vec_env(env_kwargs, seed, normalize_obs=True, normalize_reward=True):
     """
     Creates vectorized environments for training and evaluation.
 
     Args:
         env_kwargs (dict): Base arguments for the F110GymWrapper environment.
         seed (int): Random seed.
-        num_envs (int): Number of parallel environments to use.
-        num_param_cmbs (int): Number of parameter combinations to use for domain randomization.
-                             If None and use_domain_randomization is True, defaults to num_envs.
-        use_domain_randomization (bool): Whether to randomize environment parameters.
-        include_params_in_obs (bool): Whether to include environment parameters in observations.
-        racing_mode (bool): Whether to use racing mode with two cars.
         normalize_obs (bool): Whether to normalize observations.
         normalize_reward (bool): Whether to normalize rewards.
-        lidar_scan_in_obs_mode (str): Mode for lidar scan in observations.
 
     Returns:
         VecEnv: The vectorized environment, optionally wrapped with VecNormalize.
+        
+    Note:
+        All other parameters are read from FLAGS singleton.
     """
+    # Read parameters from FLAGS
+    num_envs = FLAGS.num_envs
+    num_param_cmbs = FLAGS.num_param_cmbs
+    use_domain_randomization = FLAGS.use_dr
+    include_params_in_obs = FLAGS.include_params_in_obs
+    racing_mode = FLAGS.racing_mode
+    lidar_scan_in_obs_mode = FLAGS.lidar_scan_in_obs_mode
+    
     # If num_param_cmbs is not specified but DR is used, default to num_envs
     if num_param_cmbs is None and use_domain_randomization:
         num_param_cmbs = num_envs
@@ -1998,39 +2050,41 @@ def create_vec_env(env_kwargs, seed, num_envs=1, num_param_cmbs=None, use_domain
     return vec_env
 
 # Updated train function to handle VecEnv and Domain Randomization
-def train(env, seed, num_envs=1, num_param_cmbs=None, use_domain_randomization=False, use_imitation_learning=True, imitation_policy_type="PURE_PURSUIT", algorithm="SAC", include_params_in_obs=True, racing_mode=False, normalize_obs=True, normalize_reward=True, feature_extractor_name="FILM", lidar_scan_in_obs_mode="FULL"):
+def train(env, seed):
     """
     Trains the RL model.
 
     Args:
         env: Vectorized environment for training.
         seed (int): Random seed.
-        num_envs (int): Number of parallel environments to use.
-        num_param_cmbs (int): Number of parameter combinations to use for domain randomization.
-                             If None and use_domain_randomization is True, defaults to num_envs.
-        use_domain_randomization (bool): Whether to randomize environment parameters.
-        use_imitation_learning (bool): Whether to use imitation learning before RL training.
-        imitation_policy_type (str): Policy for imitation learning.
-        algorithm (str): RL algorithm to use (e.g., SAC, PPO, RECURRENT_PPO).
-        include_params_in_obs (bool): Whether to include environment parameters in observations.
-        racing_mode (bool): Whether to train in racing mode with two cars.
-        normalize_obs (bool): Whether to normalize observations.
-        normalize_reward (bool): Whether to normalize rewards.
-        feature_extractor_name (str): Name of feature extractor architecture to use.
-        lidar_scan_in_obs_mode (str): Mode for lidar scan in observations.
+        
+    Note:
+        All other parameters are read from FLAGS singleton.
     """
+    # Read parameters from FLAGS
+    num_envs = FLAGS.num_envs
+    num_param_cmbs = FLAGS.num_param_cmbs
+    use_domain_randomization = FLAGS.use_dr
+    use_imitation_learning = FLAGS.use_il
+    imitation_policy_type = FLAGS.il_policy
+    algorithm = FLAGS.algorithm
+    include_params_in_obs = FLAGS.include_params_in_obs
+    racing_mode = FLAGS.racing_mode
+    feature_extractor_name = FLAGS.feature_extractor
+    lidar_scan_in_obs_mode = FLAGS.lidar_scan_in_obs_mode
+    
     # --- Create Model ---
     logging.info(f"Creating {algorithm} model with {feature_extractor_name} feature extractor")
     if algorithm == "PPO":
-        model = create_ppo(env, seed, include_params_in_obs, feature_extractor_name, lidar_scan_in_obs_mode)
+        model = create_ppo(env, seed)
     elif algorithm == "RECURRENT_PPO":
-        model = create_recurrent_ppo(env, seed, include_params_in_obs, feature_extractor_name, lidar_scan_in_obs_mode)
+        model = create_recurrent_ppo(env, seed)
     elif algorithm == "DDPG":
-        model = create_ddpg(env, seed, include_params_in_obs, feature_extractor_name, lidar_scan_in_obs_mode)
+        model = create_ddpg(env, seed)
     elif algorithm == "TD3":
-        model = create_td3(env, seed, include_params_in_obs, feature_extractor_name, lidar_scan_in_obs_mode)
+        model = create_td3(env, seed)
     elif algorithm == "SAC":
-        model = create_sac(env, seed, include_params_in_obs, feature_extractor_name, lidar_scan_in_obs_mode)
+        model = create_sac(env, seed)
     else:
         raise ValueError(f"Unsupported algorithm: {algorithm}")
 
