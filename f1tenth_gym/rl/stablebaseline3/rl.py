@@ -1399,7 +1399,7 @@ def evaluate(eval_env, model_path=None, model=None, vecnorm_path=None):
     
     # Plot velocity profiles if we have collected data
     any_data = any(len(pos) > 0 for pos in env_positions)
-    if any_data:
+    if any_data and FLAGS.plot_in_eval:
         try:
             plot_velocity_profiles(env_positions, env_velocities, env_params, num_envs, track, model_path, algorithm)
         except Exception as e:

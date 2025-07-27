@@ -32,17 +32,17 @@ class LatticePlannerPolicy:
         self.lateral_offsets = np.linspace(-2, 2, num_trajectories)  # Lateral offset options
         
         # Speed control
-        self.max_speed = 6.0
+        self.max_speed = 2.0
         self.min_speed = 0.5
         
         # Obstacle parameters
         self.obstacle_view_angle = np.pi / 4
-        self.obstacle_detection_range = 1.0  # Increased range to detect obstacles in lidar
+        self.obstacle_detection_range = 5.0  # Increased range to detect obstacles in lidar
         self.min_obstacle_separation = 0.3  # Minimum separation between obstacle points to be considered different obstacles
         self.max_obstacles = 3  # Maximum number of obstacles to track
         
         # Cost weights
-        self.w_deviation = 0.0  # Weight for centerline deviation
+        self.w_deviation = 1.0  # Weight for centerline deviation
         self.w_velocity = 1.0   # Weight for velocity (higher is better)
         self.w_obstacle = 5.0   # Weight for obstacle avoidance (higher is safer)
         self.w_smoothness = 1.0 # Weight for trajectory smoothness
@@ -88,6 +88,7 @@ class LatticePlannerPolicy:
             current_s, 
             current_ey, 
             current_vel,
+            current_yaw,
             obstacles
         )
         
@@ -208,13 +209,13 @@ class LatticePlannerPolicy:
             
         return trajectories
     
-    def _evaluate_trajectories(self, trajectories, current_s, current_ey, current_vel, obstacles):
+    def _evaluate_trajectories(self, trajectories, current_s, current_ey, current_vel, current_yaw, obstacles):
         """
         Evaluate all trajectories and select the best one based on cost function
         
         Args:
             trajectories: List of candidate trajectories
-            current_s, current_ey, current_vel: Current state
+            current_s, current_ey, current_vel, current_yaw: Current state
             obstacles: List of detected obstacles [distance, angle, estimated_s, estimated_ey]
             
         Returns:
@@ -224,14 +225,26 @@ class LatticePlannerPolicy:
         best_cost = float('inf')
         best_trajectory = None
         
+        # Get the car's current pose in the world frame for coordinate transformations.
+        current_x, current_y, _ = self.track.frenet_to_cartesian(current_s, current_ey, 0)
+
         # First, calculate the estimated s and ey for each obstacle (if not already calculated)
         for obstacle in obstacles:
             if obstacle[2] is None or obstacle[3] is None:  # If s and ey not yet calculated
-                # Convert from polar to frenet coordinates
+                # Convert from polar (relative to car) to absolute cartesian, then to frenet
                 distance, angle = obstacle[0], obstacle[1]
-                # Estimate obstacle's position in frenet coordinates
-                obstacle_s_est = current_s + distance * np.cos(angle)
-                obstacle_ey_est = current_ey + distance * np.sin(angle)
+
+                # Obstacle position relative to the car's body frame (Cartesian)
+                x_obs_body = distance * np.cos(angle)
+                y_obs_body = distance * np.sin(angle)
+
+                # Rotate and translate to the world frame
+                x_obs_world = current_x + x_obs_body * np.cos(current_yaw) - y_obs_body * np.sin(current_yaw)
+                y_obs_world = current_y + x_obs_body * np.sin(current_yaw) + y_obs_body * np.cos(current_yaw)
+                
+                # Convert from world Cartesian to track Frenet coordinates
+                obstacle_s_est, obstacle_ey_est, _ = self.track.cartesian_to_frenet(x_obs_world, y_obs_world, 0, current_s)
+
                 # Update the obstacle with estimated coordinates
                 obstacle[2] = obstacle_s_est
                 obstacle[3] = obstacle_ey_est

@@ -7,7 +7,7 @@ class PurePursuitPolicy:
     Pure Pursuit policy for F1Tenth gym environment
     Follows waypoints with a lookahead distance approach using Frenet frame.
     """
-    def __init__(self, track: Track, lookahead_distance=0.5, wheelbase=0.33):
+    def __init__(self, track: Track, lookahead_distance=1.0, wheelbase=0.33):
         # Configuration
         self.lookahead_distance = lookahead_distance
         self.wheelbase = wheelbase  # Distance between front and rear axles
@@ -43,7 +43,7 @@ class PurePursuitPolicy:
         current_yaw_car_global = observation[3] # Car's yaw angle in the global frame
         
         # Get current position and track yaw from track object
-        current_x, current_y, current_yaw_track = self.track.frenet_to_cartesian(current_s, 0, 0)
+        current_x, current_y, current_yaw_track = self.track.frenet_to_cartesian(current_s, current_ey, 0)
         # Calculate the car's actual x, y using ey
         current_x -= current_ey * np.sin(current_yaw_track)
         current_y += current_ey * np.cos(current_yaw_track)

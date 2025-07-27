@@ -42,6 +42,7 @@ flags.DEFINE_enum("lidar_scan_in_obs_mode", "DOWNSAMPLED", ["NONE", "FULL", "DOW
 
 flags.DEFINE_boolean("eval", False, "Run only evaluation (no training)")
 flags.DEFINE_integer("num_eval_episodes", 1, "Number of episodes to evaluate")
+flags.DEFINE_boolean("plot_in_eval", True, "Plot in evaluation")
 flags.DEFINE_integer("seed", 42, "Random seed for reproducibility")
 flags.DEFINE_integer("map_index", 63, "Index of the map to use")
 flags.DEFINE_string("logging_level", "INFO", "Logging level")
