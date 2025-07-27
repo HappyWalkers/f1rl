@@ -1338,6 +1338,7 @@ def evaluate(eval_env, model_path=None, model=None, vecnorm_path=None):
         eval_env.racing_mode = racing_mode
     
     
+    eval_env = setup_vecnormalize(eval_env, vecnorm_path, model_path)
     is_vec_env = isinstance(eval_env, (DummyVecEnv, SubprocVecEnv, VecNormalize))
     num_envs = eval_env.num_envs if is_vec_env else 1
     
