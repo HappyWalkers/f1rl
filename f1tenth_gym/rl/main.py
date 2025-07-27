@@ -27,6 +27,7 @@ from utils import utils
 from matplotlib import pyplot as plt
 from PIL import Image
 import wandb
+from mpc import MPCPolicy
 
 FLAGS = flags.FLAGS
 
@@ -48,7 +49,7 @@ flags.DEFINE_integer("map_index", 63, "Index of the map to use")
 flags.DEFINE_string("logging_level", "INFO", "Logging level")
 flags.DEFINE_string("model_path", "./logs/best_model/best_model.zip", "Path to the model to evaluate")
 flags.DEFINE_string("vecnorm_path", "./logs/best_model/vec_normalize.pkl", "Path to the VecNormalize statistics file. If None, will try to infer from model_path.")
-flags.DEFINE_enum("algorithm", "RECURRENT_PPO", ["SAC", "PPO", "RECURRENT_PPO", "DDPG", "TD3", "WALL_FOLLOW", "PURE_PURSUIT", "LATTICE"], "Algorithm used")
+flags.DEFINE_enum("algorithm", "RECURRENT_PPO", ["SAC", "PPO", "RECURRENT_PPO", "DDPG", "TD3", "WALL_FOLLOW", "PURE_PURSUIT", "LATTICE", "MPC"], "Algorithm used")
 flags.DEFINE_enum("feature_extractor", "RESNET", ["MLP", "RESNET", "FILM", "TRANSFORMER", "MOE"], "Feature extractor architecture to use")
 
 # WandB flags

@@ -19,6 +19,7 @@ from sortedcontainers import SortedList
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib import cm
+from mpc import MPCPolicy
 
 # Imitation learning imports
 from imitation.algorithms import bc
@@ -379,6 +380,9 @@ def load_model_for_evaluation(model_path, algorithm, model=None, track=None):
         from lattice_planner import LatticePlannerPolicy
         logging.info("Using lattice planner policy for evaluation")
         return LatticePlannerPolicy(track=track, lidar_scan_in_obs_mode=FLAGS.lidar_scan_in_obs_mode)
+    elif algorithm == "MPC":
+        logging.info("Using MPC policy for evaluation")
+        return MPCPolicy(track=track)
     elif model is None:
         logging.info(f"Loading {algorithm} model from {model_path}")
         
@@ -470,6 +474,8 @@ def run_evaluation_episode(eval_env, model, env_idx, is_vec_env, is_recurrent):
         elif hasattr(action, '__len__') and len(action) == 1:
             # Some policies might only output steering, use observed velocity
             desired_velocity = float(single_obs[2]) if len(single_obs) > 2 else 0.0
+        elif algorithm in ["WALL_FOLLOW", "PURE_PURSUIT", "LATTICE", "MPC"]:
+            desired_velocity = float(action[1])
         else:
             # Fallback for other action formats
             desired_velocity = 0.0
@@ -1344,7 +1350,7 @@ def evaluate(eval_env, model_path=None, model=None, vecnorm_path=None):
     
     # Initialize track model for expert policies
     track = None
-    if algorithm in ["WALL_FOLLOW", "PURE_PURSUIT", "LATTICE"]:
+    if algorithm in ["WALL_FOLLOW", "PURE_PURSUIT", "LATTICE", "MPC"]:
         if is_vec_env:
             track = eval_env.get_attr("track", indices=0)[0]
         else:
@@ -1511,6 +1517,8 @@ def initialize_expert_policies(vec_env, imitation_policy_type, racing_mode):
             if not racing_mode:
                 logging.warning("LATTICE planner is designed for racing mode. Using it in non-racing mode may not be optimal.")
             expert_policies.append(LatticePlannerPolicy(track=track, lidar_scan_in_obs_mode=FLAGS.lidar_scan_in_obs_mode))
+        elif imitation_policy_type == "MPC":
+            expert_policies.append(MPCPolicy(track=track))
         else:
             raise ValueError(f"Unsupported imitation_policy_type: {imitation_policy_type}")
     

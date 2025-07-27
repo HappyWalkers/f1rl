@@ -651,7 +651,33 @@ if __name__ == "__main__":
     config = Config()
     config.map_ind = 58
     map_info = np.genfromtxt(config.map_dir + 'map_info.txt', delimiter='|', dtype='str')
-    track, config = Track.load_map(config.map_dir, map_info, config.map_ind, config, scale=config.map_scale, downsample_step=1)
+    config.map_path = map_info[config.map_ind][1]
+    config.track_path = map_info[config.map_ind][2]
+    config.map_ext = map_info[config.map_ind][3]
+    MAP_DIR = "f1tenth_gym/" + config.map_dir
+
+    waypoints = np.loadtxt(
+        MAP_DIR + config.wpt_path,
+        delimiter=config.wpt_delim,
+        skiprows=config.wpt_rowskip,
+    )
+    track = Track(
+        name=map_name,
+        xs=waypoints[:, config.wpt_xind],
+        ys=waypoints[:, config.wpt_yind],
+        velxs=waypoints[:, config.wpt_vind],
+        ss=waypoints[:, 0],
+        psis=waypoints[:, config.wpt_thind],
+        kappas=waypoints[:, 4],
+        accxs=waypoints[:, 6],
+        filepath=None,
+        centerline=CubicSplineND(waypoints[:, 0], waypoints[:, 1], waypoints[:, 3], waypoints[:, 4], waypoints[:, 5], waypoints[:, 6]),
+        raceline=CubicSplineND(waypoints[:, 0], waypoints[:, 1], waypoints[:, 3], waypoints[:, 4], waypoints[:, 5], waypoints[:, 6]),
+        waypoints=waypoints,
+        s_frame_max=config.s_frame_max,
+        tr_rights=waypoints[:, 7],
+        tr_lefts=waypoints[:, 8]
+    )
 
     print(track.frenet_to_cartesian(369.5279, -0.33358, 0.05985))
     print(track.frenet_to_cartesian_jax(369.5279, -0.33358, 0.05985))
