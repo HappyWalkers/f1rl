@@ -25,7 +25,6 @@ class WallFollowPolicy:
         # Configuration
         self.desired_distance = desired_distance
         self.angle_min = -2.35  # From LiDAR configuration
-        self.angle_increment = 0.00435  # From LiDAR configuration
         self.looking_ahead_distance = 1.0  # Look-ahead for smoother control
         
         # Get lidar mode from FLAGS if available, otherwise default to FULL
@@ -38,14 +37,18 @@ class WallFollowPolicy:
         self.state_dim = 4  # [s, ey, vel, yaw_angle]
         if self.lidar_mode == "NONE":
             self.lidar_dim = 0
+            self.angle_increment = 0.0  # Not used
         elif self.lidar_mode == "FULL":
             self.lidar_dim = 1080
+            self.angle_increment = 0.00435  # Full resolution
         elif self.lidar_mode == "DOWNSAMPLED":
             self.lidar_dim = 108
+            self.angle_increment = 0.00435 * 10  # Downsampled by factor of 10
         else:
             logging.warning(f"Unknown lidar mode: {self.lidar_mode}, defaulting to FULL")
             self.lidar_mode = "FULL"
             self.lidar_dim = 1080
+            self.angle_increment = 0.00435
             
         # Check if parameters are included in observation
         try:
@@ -133,19 +136,7 @@ class WallFollowPolicy:
         
         if self.lidar_dim > 0 and len(observation) >= lidar_end_idx:
             lidar_data = observation[lidar_start_idx:lidar_end_idx]
-            
-            # Convert back to full resolution if downsampled for wall following algorithm
-            if self.lidar_mode == "DOWNSAMPLED":
-                # Interpolate to approximate full resolution for better wall following
-                full_lidar = np.zeros(1080)
-                for i in range(len(lidar_data)):
-                    # Fill in 10 consecutive points with the same value
-                    start_idx = i * 10
-                    end_idx = min(start_idx + 10, 1080)
-                    full_lidar[start_idx:end_idx] = lidar_data[i]
-                obs_dict['lidar_scan'] = full_lidar
-            else:
-                obs_dict['lidar_scan'] = lidar_data
+            obs_dict['lidar_scan'] = lidar_data
         
         # Extract parameters if present
         if self.param_dim > 0 and len(observation) >= lidar_end_idx + self.param_dim:
@@ -265,8 +256,8 @@ class WallFollowPolicy:
         combined_factor = np.clip(combined_factor, 0.0, 1.0)
         
         # Map the factor to speed range: 1.5 (cautious) to 6.0 (fast)
-        min_speed = 1.5
-        max_speed = 6.0
+        min_speed = 0.5
+        max_speed = 2.0
         speed = max_speed - combined_factor * (max_speed - min_speed)
         
         return speed

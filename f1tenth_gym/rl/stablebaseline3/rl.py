@@ -1337,7 +1337,6 @@ def evaluate(eval_env, model_path=None, model=None, vecnorm_path=None):
         logging.info("Evaluating in racing mode with two cars")
         eval_env.racing_mode = racing_mode
     
-    eval_env = setup_vecnormalize(eval_env, vecnorm_path, model_path)
     
     is_vec_env = isinstance(eval_env, (DummyVecEnv, SubprocVecEnv, VecNormalize))
     num_envs = eval_env.num_envs if is_vec_env else 1
@@ -1354,6 +1353,7 @@ def evaluate(eval_env, model_path=None, model=None, vecnorm_path=None):
         if model is None:
             model = load_model_for_evaluation(model_path, algorithm, track=track)
     else:
+        eval_env = setup_vecnormalize(eval_env, vecnorm_path, model_path)
         model = load_model_for_evaluation(model_path, algorithm, model=model)
     
     # Initialize metrics and trajectory data storage
