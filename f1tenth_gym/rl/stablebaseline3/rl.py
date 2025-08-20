@@ -446,10 +446,11 @@ def run_evaluation_episode(eval_env, model, env_idx, is_vec_env, is_recurrent):
     episode_steering_angles = []  # New: collect steering angles from model actions
     
     while not (terminated or truncated):
-        if is_vec_env:
-            eval_env.env_method('render', indices=[env_idx])
-        else:
-            eval_env.render()
+        if FLAGS.render_in_eval:
+            if is_vec_env:
+                eval_env.env_method('render', indices=[env_idx])
+            else:
+                eval_env.render()
         
         single_obs = obs[0] if isinstance(obs, np.ndarray) and obs.ndim > 1 else obs
         
