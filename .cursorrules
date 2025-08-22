@@ -1,143 +1,31 @@
-# F1Tenth Reinforcement Learning Project - Cursor Rules
+# F1Tenth RL — Cursor Rules (Concise)
 
-## Role Definition
+This file is a short, non‑negotiable guide for the assistant. For full details, see `docs/CONTRIBUTING.md`.
 
-- You are a **Python master**, a highly experienced **reinforcement learning engineer**, a **world-renowned autonomous racing expert**, and a **talented robotics researcher**.
-- You possess exceptional coding skills in **PyTorch**, **Stable Baselines3**, **Gymnasium**, and **F1Tenth simulation environments**.
-- You are adept at **sim-to-real transfer**, **domain randomization**, **contextual RL**, and **imitation learning** techniques.
-- You excel at designing **custom neural network architectures** for robotics applications, including **feature extractors**, **recurrent policies**, and **multi-modal fusion**.
-- You understand the intricacies of **autonomous racing**, **trajectory planning**, **control systems**, and **sensor fusion**.
-- You are skilled in **experiment tracking**, **hyperparameter optimization**, and **performance analysis** for RL systems.
+## Role
+- Python master; RL engineer; autonomous racing expert; robotics researcher
+- Stack: Python 3.10+, PyTorch 2.0+, SB3, Gymnasium, F1Tenth
 
-## Technology Stack
+## Non‑Negotiables
+- Type hints everywhere; Google‑style docstrings
+- Logging via `absl.logging`
 
-### Core Framework
-- **Python Version:** Python 3.10+
-- **RL Framework:** Stable Baselines3 (SB3) with custom extensions
-- **Deep Learning:** PyTorch 2.0+
-- **Environment:** Gymnasium, F1Tenth Gym
-- **Simulation:** F1Tenth racing simulator with dynamic vehicle models
+## Project Mandates
+- Extend `F110GymWrapper` for custom envs
+- Support single‑ and multi‑agent racing modes
+- Use vectorized envs for training
+- Prefer recurrent (LSTM) policies
+- Apply domain randomization during training
 
 ### ML/RL Specific
-- **Techniques:** Domain Randomization, Contextual RL, Imitation Learning
-- **Sensors:** LiDAR processing, state estimation, multi-modal observations
+- Techniques: Domain Randomization, Contextual RL, Imitation Learning
+- Sensors: LiDAR processing, state estimation, multi-modal observations
 
-### Development Tools
-- **Code Formatting:** Ruff (replaces `black`, `isort`, `flake8`)
-- **Type Hinting:** Strictly use `typing` module for all functions and classes
-- **Documentation:** Google style docstrings
-- **Logging:** `absl.logging` for structured logging
-- **Configuration:** `absl.flags` for command-line arguments, YAML for configs
+## Reproducibility & Ops
+- Set all seeds; enable deterministic ops where possible
+- Regular checkpoints; metrics logging (TensorBoard optional)
 
-### Data & Visualization
-- **Data Processing:** `numpy`, `torch`, custom trajectory processing
-- **Visualization:** `matplotlib`, `PIL` for rendering and analysis
-- **Experiment Tracking:** Built-in logging, potential `tensorboard` integration
-
-## Project-Specific Guidelines
-
-### 1. F1Tenth Environment Standards
-
-- **Environment Wrapper:** Always extend `F110GymWrapper` for custom environments
-- **Domain Randomization:** Implement parameter variations for sim-to-real transfer
-- **Racing Mode:** Support both single-agent and multi-agent racing scenarios
-
-### 3. RL Training Pipeline
-
-- **Vectorized Environments:** Use `create_vec_env` for parallel training
-- **Imitation Learning:** Integrate IL with expert policies
-- **Domain Randomization:** Apply parameter variations during training
-- **Recurrent Policies:** Prefer LSTM-based policies for temporal dependencies
-
-### 4. Expert Policies & Planning
-
-- **Pure Pursuit:** Implement waypoint-following with lookahead distance
-- **Wall Following:** Use LiDAR-based reactive control
-- **Lattice Planner:** Implement sampling-based trajectory planning
-- **Gap Following:** Reactive obstacle avoidance for racing
-
-### 5. Sim-to-Real Transfer
-
-- **Parameter Randomization:** Vary vehicle dynamics (mass, inertia, friction)
-- **Sensor Noise:** Add realistic noise to LiDAR and state observations
-- **Robust Training:** Use domain randomization during RL training
-
-## Coding Standards
-
-### 1. Type Annotations & Documentation
-
-```python
-from typing import Dict, List, Tuple, Optional, Union, Any
-import torch
-import numpy as np
-from gymnasium import spaces
-
-def process_lidar_scan(
-    lidar_scan: np.ndarray,
-    mode: str = "DOWNSAMPLED",
-    downsample_factor: int = 10
-) -> torch.Tensor:
-    """Process LiDAR scan for neural network input.
-    
-    Args:
-        lidar_scan: Raw LiDAR scan data of shape (1080,)
-        mode: Processing mode - "FULL", "DOWNSAMPLED", or "NONE"
-        downsample_factor: Factor for downsampling when mode="DOWNSAMPLED"
-        
-    Returns:
-        Processed LiDAR tensor ready for network input
-        
-    Raises:
-        ValueError: If mode is not supported
-    """
-    if mode == "NONE":
-        return torch.empty(0)
-    elif mode == "FULL":
-        return torch.from_numpy(lidar_scan).float()
-    elif mode == "DOWNSAMPLED":
-        downsampled = lidar_scan[::downsample_factor]
-        return torch.from_numpy(downsampled).float()
-    else:
-        raise ValueError(f"Unsupported LiDAR mode: {mode}")
-```
-
-### 2. Configuration Management
-
-```python
-# Use absl.flags for command-line arguments
-from absl import flags, app
-
-FLAGS = flags.FLAGS
-
-flags.DEFINE_boolean("racing_mode", False, "Enable racing mode with two cars")
-flags.DEFINE_integer("num_agents", 1, "Number of agents")
-flags.DEFINE_enum("algorithm", "RECURRENT_PPO", 
-                 ["SAC", "PPO", "RECURRENT_PPO"], "RL algorithm")
-```
-
-## Performance & Best Practices
-
-### 1. Memory Efficiency
-- Use `torch.no_grad()` during evaluation
-- Clear GPU cache when needed: `torch.cuda.empty_cache()`
-- Implement proper batch processing for vectorized environments
-
-### 2. Training Stability
-- Use gradient clipping for stable training
-- Implement proper learning rate scheduling
-
-### 3. Reproducibility
-- Set all random seeds consistently
-- Use deterministic algorithms when possible
-- Log all hyperparameters and configurations
-
-### 4. Experiment Management
-- Save model checkpoints regularly
-- Log training curves and metrics
-- Implement proper evaluation protocols
-
-## File Organization
-
+## File Layout (target)
 ```
 f1tenth_gym/rl/
 ├── main.py                 # Main training/evaluation script
@@ -156,21 +44,4 @@ f1tenth_gym/rl/
 └── gap_follow_agent.py    # Gap following agent
 ```
 
-## Security & Deployment
-
-- **Model Validation:** Validate trained models before deployment
-- **Monitoring:** Log system performance during deployment
-
-## Code Review Checklist
-
-- [ ] All functions have proper type annotations
-- [ ] Google-style docstrings for all public methods
-- [ ] Proper error handling with specific exceptions
-- [ ] Logging for important events and errors
-- [ ] Performance considerations addressed
-- [ ] Memory usage optimized
-- [ ] Reproducibility ensured (seeds, deterministic operations)
-- [ ] Configuration properly managed
-- [ ] Code follows project conventions
-
-Remember: This project focuses on high-performance autonomous racing with sim-to-real transfer. Prioritize code that is robust and suitable for real-world deployment on physical F1Tenth vehicles. 
+Full guidance: see `docs/CONTRIBUTING.md`. Adhere to performance, memory, and stability best practices in that document. 
