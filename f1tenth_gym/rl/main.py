@@ -16,7 +16,6 @@ from skrl.models.torch import Model
 from absl import app
 from absl import flags
 from absl import logging
-from gap_follow_agent import Gap_follower
 import sk
 import stablebaseline3
 from rl_env import F110GymWrapper
@@ -27,7 +26,6 @@ from utils import utils
 from matplotlib import pyplot as plt
 from PIL import Image
 import wandb
-from mpc import MPCPolicy
 
 FLAGS = flags.FLAGS
 
@@ -50,7 +48,7 @@ flags.DEFINE_integer("map_index", 63, "Index of the map to use")
 flags.DEFINE_string("logging_level", "INFO", "Logging level")
 flags.DEFINE_string("model_path", "./logs/best_model/best_model.zip", "Path to the model to evaluate")
 flags.DEFINE_string("vecnorm_path", "./logs/best_model/vec_normalize.pkl", "Path to the VecNormalize statistics file. If None, will try to infer from model_path.")
-flags.DEFINE_enum("algorithm", "RECURRENT_PPO", ["SAC", "PPO", "RECURRENT_PPO", "DDPG", "TD3", "WALL_FOLLOW", "PURE_PURSUIT", "LATTICE", "MPC"], "Algorithm used")
+flags.DEFINE_enum("algorithm", "RECURRENT_PPO", ["SAC", "PPO", "RECURRENT_PPO", "DDPG", "TD3", "WALL_FOLLOW", "PURE_PURSUIT", "LATTICE"], "Algorithm used")
 flags.DEFINE_enum("feature_extractor", "RESNET", ["MLP", "RESNET", "FILM", "TRANSFORMER", "MOE"], "Feature extractor architecture to use")
 
 # WandB flags
@@ -60,26 +58,6 @@ flags.DEFINE_string("wandb_notes", "", "Notes for the WandB run")
 flags.DEFINE_enum("wandb_mode", "online", ["online", "offline", "disabled"], "WandB mode")
 
 os.environ['F110GYM_PLOT_SCALE'] = str(60.)
-
-    
-def test_env(env):
-    gap_follower = Gap_follower()
-
-    for ep_i in range(20):
-        obs = env.reset()
-        done = False
-        i = 0
-        min_obs = []
-        while not (done):
-            i += 1
-            env.render()
-            steer = 0
-            speed = 1
-            ##### use policy ######
-            # breakpoint()
-            action, metric = gap_follower.planning(obs)
-            obs, step_reward, done, info = env.step(action)
-        print('finish one episode')
 
 
 def setup_wandb_config():
