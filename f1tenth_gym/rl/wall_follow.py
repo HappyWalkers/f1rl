@@ -25,7 +25,7 @@ class WallFollowPolicy:
         # Configuration
         self.desired_distance = desired_distance
         self.angle_min = -2.35  # From LiDAR configuration
-        self.looking_ahead_distance = 1.0  # Look-ahead for smoother control
+        self.looking_ahead_distance = 0.5  # Look-ahead for smoother control
         
         # Get lidar mode from FLAGS if available, otherwise default to FULL
         try:
@@ -62,17 +62,6 @@ class WallFollowPolicy:
                     f"lidar_dim={self.lidar_dim}, include_params={self.include_params}")
         
     def predict(self, observation, deterministic=True):
-        """
-        Implements the predict interface expected by the evaluate function
-        
-        Args:
-            observation: The environment observation [s, ey, vel, yaw_angle, lidar_data, params]
-            deterministic: Whether to use deterministic actions (ignored in wall following)
-            
-        Returns:
-            action: [steering, speed] action
-            _: None (to match the RL policy interface)
-        """
         # Parse observation components
         obs_components = self._parse_observation(observation)
         
@@ -111,16 +100,7 @@ class WallFollowPolicy:
         
         return np.array([steering, speed]), None
     
-    def _parse_observation(self, observation):
-        """
-        Parse the observation array into its components based on the environment configuration.
-        
-        Args:
-            observation: Full observation array from the environment
-            
-        Returns:
-            dict: Dictionary containing parsed observation components
-        """
+    def _parse_observation(self, observation) -> dict:
         obs_dict = {
             's': observation[0],           # Frenet arc length
             'ey': observation[1],          # Lateral deviation
@@ -182,12 +162,6 @@ class WallFollowPolicy:
     def get_error(self, ranges):
         """
         Calculate the error to the wall using geometry
-        
-        Args:
-            ranges: LiDAR scan data
-            
-        Returns:
-            error: Error from desired distance to wall
         """
         # Get measurements at 90 degrees (directly to the left) and 45 degrees
         angle_90 = self.angle_to_radian(90)
@@ -195,11 +169,8 @@ class WallFollowPolicy:
         
         b = self.get_range(ranges, angle_90)
         a = self.get_range(ranges, angle_45)
-        
-        # Handle invalid measurements
-        if b > 10.0 or a > 10.0:
-            # If we're too far from a wall, default to small error
-            return 0.1
+
+        logging.debug(f"distance to angle 90: {b}, distance to angle 45: {a}")
         
         # Calculate angle to the wall using trigonometry
         theta = 45  # The difference between our two measurements

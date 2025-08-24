@@ -14,9 +14,6 @@
         * expert policies shoud use raw observation for convenience; the imitation learning phase can use unnormalized observations for expert policies and keep the normalized observations for training
           * for off-policy methods, the train method of model will sample raw observations and rewards from buffer and applies normalization if vecnorm is available
           * for on-policy methods, the BC seems to use the transitions directly, so we may need to use normalized observations and rewards
-      * In evaluation, avoid env_method and drive the VecEnv normally with full reset()/step()
-  * make the rendering flag to have multiple options, render, videos, off because I work on a remote host without monitor right now
-    * ~~headless environment make it hard for AI to do so~~
   * fix expert policies
     * wall following
     * pure pursuit
