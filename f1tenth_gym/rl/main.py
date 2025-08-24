@@ -60,37 +60,6 @@ flags.DEFINE_enum("wandb_mode", "online", ["online", "offline", "disabled"], "Wa
 os.environ['F110GYM_PLOT_SCALE'] = str(60.)
 
 
-def setup_wandb_config():
-    """Setup WandB configuration from FLAGS"""
-    config = {
-        # Training hyperparameters
-        "algorithm": FLAGS.algorithm,
-        "feature_extractor": FLAGS.feature_extractor,
-        "num_envs": FLAGS.num_envs,
-        "num_param_cmbs": FLAGS.num_param_cmbs,
-        "seed": FLAGS.seed,
-        "map_index": FLAGS.map_index,
-        
-        # Environment settings
-        "racing_mode": FLAGS.racing_mode,
-        "num_agents": FLAGS.num_agents,
-        "use_dr": FLAGS.use_dr,
-        "include_params_in_obs": FLAGS.include_params_in_obs,
-        "lidar_scan_in_obs_mode": FLAGS.lidar_scan_in_obs_mode,
-        
-        # Imitation learning
-        "use_il": FLAGS.use_il,
-        "il_policy": FLAGS.il_policy,
-        
-        # Evaluation
-        "num_eval_episodes": FLAGS.num_eval_episodes,
-        
-        # System
-        "logging_level": FLAGS.logging_level,
-    }
-    return config
-
-
 def initialize_wandb():
     """Initialize WandB with configuration"""
     if not FLAGS.use_wandb or FLAGS.wandb_mode == "disabled":
@@ -105,7 +74,7 @@ def initialize_wandb():
         project="f1tenth-rl",
         entity=None,  # Use default entity
         name=FLAGS.wandb_run_name,
-        config=setup_wandb_config(),
+        config=FLAGS.flag_values_dict(),
         notes=FLAGS.wandb_notes,
         mode=FLAGS.wandb_mode,
         sync_tensorboard=True,  # Sync tensorboard logs if available
