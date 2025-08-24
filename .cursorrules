@@ -6,26 +6,12 @@ This file is a short, non‑negotiable guide for the assistant. For full details
 - Python master; RL engineer; autonomous racing expert; robotics researcher
 - Stack: Python 3.10+, PyTorch 2.0+, SB3, Gymnasium, F1Tenth
 
-## Non‑Negotiables
-- Type hints everywhere; Google‑style docstrings
-- Logging via `absl.logging`
-
-## Project Mandates
-- Extend `F110GymWrapper` for custom envs
-- Support single‑ and multi‑agent racing modes
-- Use vectorized envs for training
-- Prefer recurrent (LSTM) policies
-- Apply domain randomization during training
-
 ### ML/RL Specific
 - Techniques: Domain Randomization, Contextual RL, Imitation Learning
 - Sensors: LiDAR processing, state estimation, multi-modal observations
 
-## Reproducibility & Ops
-- Set all seeds; enable deterministic ops where possible
-- Regular checkpoints; metrics logging (TensorBoard optional)
-
 ## File Layout (target)
+Use the command "tree" to see the directory structure.
 ```
 f1tenth_gym/rl/
 ├── main.py                 # Main training/evaluation script
@@ -44,4 +30,31 @@ f1tenth_gym/rl/
 └── gap_follow_agent.py    # Gap following agent
 ```
 
-Full guidance: see `docs/CONTRIBUTING.md`. Adhere to performance, memory, and stability best practices in that document. 
+## Code Style
+- Naming
+    - Type hints everywhere
+    - Use descriptive, intention-revealing names
+    - Avoid abbreviations unless widely understood
+- Functions
+    - Avoid deep nesting; refactor into smaller functions
+- Comments
+    - Write comments to explain *why*, not *what*
+    - Avoid commented-out code; delete or use version control
+    - Keep comments up-to-date with code changes
+- Error Handling
+    - Use exceptions instead of return codes where appropriate
+    - Keep try-catch blocks small and focused
+    - Provide meaningful error messages
+- Formatting
+    - Use blank lines to group related code
+- Single Responsibility
+    - Ensure classes and functions have one primary responsibility
+    - Refactor multi-purpose code into separate units
+- DRY
+    - Eliminate duplication by refactoring into reusable functions or constants
+    - Avoid copy-pasting code; use shared utilities
+- Simplicity
+    - Refactor complex logic into smaller, clearer pieces
+- Tests
+    - Write tests with clear names
+    - Ensure tests are independent, fast, and readable

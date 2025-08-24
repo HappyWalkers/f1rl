@@ -169,16 +169,23 @@ def main(argv):
     }
 
     # Branch based on mode (train or evaluate)
-    # Create a vectorized environment
-    # We use the same env creation function as training for consistency
+    # Build a vectorized env for both training and evaluation
     vec_env = stablebaseline3.rl.create_vec_env(
         env_kwargs=base_env_kwargs,
         seed=FLAGS.seed
     )
+
     if FLAGS.eval:
+        vec_env = stablebaseline3.rl.setup_vecnormalize_env_eval(
+            vec_env=vec_env,
+            model_path=FLAGS.model_path,
+            vecnorm_path=FLAGS.vecnorm_path,
+        )
         stablebaseline3.rl.evaluate(eval_env=vec_env)
     else:
-        # Train with vectorized environments
+        vec_env = stablebaseline3.rl.setup_vecnormalize_env_train(
+            vec_env=vec_env,
+        )
         stablebaseline3.rl.train(env=vec_env, seed=FLAGS.seed)
 
 

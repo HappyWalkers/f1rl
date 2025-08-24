@@ -13,6 +13,7 @@ import time
 import numpy as np
 import datetime
 from tqdm import tqdm
+from typing import Tuple, List, Optional, Any
 from rl_env import F110GymWrapper # Import the wrapper
 from stablebaseline3.feature_extractor import F1TenthFeaturesExtractor, MLPFeaturesExtractor, ResNetFeaturesExtractor, TransformerFeaturesExtractor, MoEFeaturesExtractor
 from sortedcontainers import SortedList
@@ -394,125 +395,117 @@ def load_model_for_evaluation(model_path, algorithm, model=None, track=None):
         logging.info("Using provided model for evaluation")
         return model
 
-def setup_vecnormalize(eval_env, vecnorm_path, model_path):
-    """Sets up VecNormalize for the evaluation environment if needed."""
-    if vecnorm_path is None and model_path is not None:
-        model_dir = os.path.dirname(model_path)
-        potential_vecnorm_path = os.path.join(model_dir, "vec_normalize.pkl")
-        if os.path.exists(potential_vecnorm_path):
-            vecnorm_path = potential_vecnorm_path
-            logging.info(f"Found VecNormalize statistics at {vecnorm_path}")
+ 
 
-    if vecnorm_path is not None and os.path.exists(vecnorm_path):
-        logging.info(f"Loading VecNormalize statistics from {vecnorm_path}")
+def run_evaluation_episode(eval_env: DummyVecEnv | SubprocVecEnv | VecNormalize, model, is_recurrent: bool, env_idx: int = 0) -> Tuple[float, int, float, List[tuple], List[float], List[float], List[float]]:
+    """Runs a single evaluation episode on a specific vectorized env index and returns metrics.
+
+    This uses env_method to control a single sub-environment, which bypasses VecNormalize.
+    To preserve the normalization used during training, we manually normalize observations
+    with VecNormalize.normalize_obs() when available, while keeping raw observations for metrics.
+    """
+    # Reset only the specified environment (returns raw obs from underlying env)
+    obs_raw = eval_env.env_method('reset', indices=[env_idx])[0]
+    # If reset returns (obs, info) from gymnasium-compatible envs, take obs
+    if isinstance(obs_raw, tuple) and len(obs_raw) == 2:
+        obs_raw = obs_raw[0]
+
+    def maybe_normalize_obs(observation: np.ndarray) -> np.ndarray:
+        """Normalize observation using VecNormalize stats if available."""
         try:
-            base_env = eval_env.venv
-        except AttributeError:
-            base_env = eval_env
-        
-        eval_env = VecNormalize.load(vecnorm_path, base_env)
-        eval_env.training = False
-        eval_env.norm_reward = False
-        logging.info("Environment wrapped with VecNormalize (training=False, norm_reward=False)")
-    
-    return eval_env
+            if isinstance(eval_env, VecNormalize) and hasattr(eval_env, 'normalize_obs'):
+                obs_arr = np.array(observation, dtype=np.float32)
+                if obs_arr.ndim == 1:
+                    obs_arr = obs_arr[None, :]
+                obs_norm = eval_env.normalize_obs(obs_arr)
+                return obs_norm[0] if obs_norm.ndim > 1 else obs_norm
+        except Exception:
+            # Fallback to raw observation if anything goes wrong
+            pass
+        return observation
 
-def run_evaluation_episode(eval_env, model, env_idx, is_vec_env, is_recurrent):
-    """Runs a single evaluation episode and returns metrics and trajectory data."""
-    if is_vec_env:
-        obs = eval_env.env_method('reset', indices=[env_idx])[0][0]
-        obs = np.array([obs])
-        if isinstance(eval_env, VecNormalize):
-            obs = eval_env.normalize_obs(obs)
-    else:
-        obs = eval_env.reset()
-    
+    # Prepare first policy input
+    obs_input = maybe_normalize_obs(obs_raw)
+
     lstm_states = None
     episode_starts = np.ones((1,), dtype=bool)
-    
+
     terminated = False
     truncated = False
     total_reward = 0
     step_count = 0
     episode_start_time = time.time()
-    
+
     episode_positions = []
     episode_velocities = []
     episode_desired_velocities = []  # New: collect desired velocities from model actions
     episode_steering_angles = []  # New: collect steering angles from model actions
-    
+
     while not (terminated or truncated):
         if FLAGS.render_in_eval:
-            if is_vec_env:
-                eval_env.env_method('render', indices=[env_idx])
-            else:
-                eval_env.render()
-        
-        single_obs = obs[0] if isinstance(obs, np.ndarray) and obs.ndim > 1 else obs
-        
+            eval_env.env_method('render', indices=[env_idx])
+
+        single_obs_for_policy = obs_input
+
         if is_recurrent:
             action, lstm_states = model.predict(
-                single_obs, 
-                state=lstm_states, 
-                episode_start=episode_starts, 
+                single_obs_for_policy,
+                state=lstm_states,
+                episode_start=episode_starts,
                 deterministic=True
             )
         else:
-            action, _states = model.predict(single_obs, deterministic=True)
-        
+            action, _states = model.predict(single_obs_for_policy, deterministic=True)
+
         # Extract desired velocity from model action (action[1] is desired speed)
         # Handle different action formats from different policies
         if hasattr(action, '__len__') and len(action) > 1:
             desired_velocity = float(action[1])
         elif hasattr(action, '__len__') and len(action) == 1:
-            # Some policies might only output steering, use observed velocity
-            desired_velocity = float(single_obs[2]) if len(single_obs) > 2 else 0.0
+            # Some policies might only output steering, use observed (RAW) velocity
+            desired_velocity = float(obs_raw[2]) if len(obs_raw) > 2 else 0.0
         elif FLAGS.algorithm in ["WALL_FOLLOW", "PURE_PURSUIT", "LATTICE"]:
             desired_velocity = float(action[1])
         else:
             # Fallback for other action formats
             desired_velocity = 0.0
-        
+
         # Extract steering angle from model action (action[0] is steering angle)
         if hasattr(action, '__len__') and len(action) > 0:
             steering_angle = float(action[0])
         else:
             # Fallback for scalar actions
             steering_angle = float(action) if np.isscalar(action) else 0.0
-        
-        if is_vec_env:
-            obs, reward, terminated, truncated, info = eval_env.env_method(
-                'step', action, indices=[env_idx]
-            )[0]
-            
-            position, velocity = extract_position_velocity(obs, eval_env, env_idx, info)
-            if position is not None and velocity is not None:
-                episode_positions.append(position)
-                episode_velocities.append(velocity)
-                episode_desired_velocities.append(desired_velocity)
-                episode_steering_angles.append(steering_angle)
-            
-            obs = np.array([obs])
-            if isinstance(eval_env, VecNormalize):
-                obs = eval_env.normalize_obs(obs)
-            terminated = bool(terminated)
-            truncated = bool(truncated)
-            reward = float(reward)
+
+        # Step only the specified env (returns RAW next obs)
+        step_result = eval_env.env_method('step', np.array(action), indices=[env_idx])[0]
+        # step_result expected: (obs, reward, done, info) or (obs, reward, terminated, truncated, info)
+        if len(step_result) == 5:
+            next_obs_raw, reward, terminated, truncated, info = step_result
         else:
-            obs, reward, terminated, truncated, info = eval_env.step(action)
-            position, velocity = extract_position_velocity(obs, eval_env, 0, info)
-            if position is not None and velocity is not None:
-                episode_positions.append(position)
-                episode_velocities.append(velocity)
-                episode_desired_velocities.append(desired_velocity)
-                episode_steering_angles.append(steering_angle)
-        
+            next_obs_raw, reward, done, info = step_result
+            terminated = bool(done)
+            truncated = bool(info.get('TimeLimit.truncated', False) or info.get('truncated', False))
+        reward = float(reward)
+
+        # Metrics and trajectory use RAW observations
+        position, velocity = extract_position_velocity(next_obs_raw, eval_env, env_idx, info)
+        if position is not None and velocity is not None:
+            episode_positions.append(position)
+            episode_velocities.append(velocity)
+            episode_desired_velocities.append(desired_velocity)
+            episode_steering_angles.append(steering_angle)
+
+        # Prepare next loop
+        obs_raw = next_obs_raw
+        obs_input = maybe_normalize_obs(obs_raw)
+
         if is_recurrent:
             episode_starts = np.zeros((1,), dtype=bool)
-        
+
         total_reward += reward
         step_count += 1
-    
+
     episode_time = time.time() - episode_start_time
     return total_reward, step_count, episode_time, episode_positions, episode_velocities, episode_desired_velocities, episode_steering_angles
 
@@ -527,7 +520,10 @@ def extract_position_velocity(obs, env, agent_idx=0, info=None):
     # Try to get track to convert to cartesian
     track = None
     if hasattr(env, 'get_attr'):
-        track = env.get_attr("track", indices=[agent_idx])[0]
+        try:
+            track = env.get_attr("track", indices=[agent_idx])[0]
+        except Exception:
+            track = None
     elif hasattr(env, "track"):
         track = env.track
         
@@ -541,19 +537,7 @@ def extract_position_velocity(obs, env, agent_idx=0, info=None):
         
     return position, velocity
 
-def evaluate(eval_env, model_path=None, model=None, vecnorm_path=None):
-    """
-    Evaluates a trained model or wall-following policy on the environment.
-    
-    Args:
-        eval_env: Environment for evaluation.
-        model_path (str): Path to the model file (optional, read from FLAGS if None).
-        model: Pre-loaded model (optional).
-        vecnorm_path (str): Path to VecNormalize statistics file (optional, read from FLAGS if None).
-        
-    Note:
-        Other parameters are read from FLAGS singleton.
-    """
+def evaluate(eval_env, model_path=None, model=None):
     # Read parameters from FLAGS
     algorithm = FLAGS.algorithm
     num_episodes = FLAGS.num_eval_episodes
@@ -562,31 +546,19 @@ def evaluate(eval_env, model_path=None, model=None, vecnorm_path=None):
     # Set default paths from FLAGS if not provided
     if model_path is None:
         model_path = FLAGS.model_path
-    if vecnorm_path is None:
-        vecnorm_path = FLAGS.vecnorm_path
     
-    if racing_mode:
-        logging.info("Evaluating in racing mode with two cars")
-        eval_env.racing_mode = racing_mode
-    
-    
-    eval_env = setup_vecnormalize(eval_env, vecnorm_path, model_path)
-    is_vec_env = isinstance(eval_env, (DummyVecEnv, SubprocVecEnv, VecNormalize))
-    num_envs = eval_env.num_envs if is_vec_env else 1
-    
-    # Initialize track model for expert policies
+    # Vectorized env (Dummy or Subproc or VecNormalize)
+    num_envs = getattr(eval_env, 'num_envs', 1)
+
+    # Initialize track for expert policies (raw env only)
     track = None
     if algorithm in ["WALL_FOLLOW", "PURE_PURSUIT", "LATTICE"]:
-        if is_vec_env:
+        if hasattr(eval_env, 'get_attr'):
             track = eval_env.get_attr("track", indices=0)[0]
-        else:
-            track = getattr(eval_env, 'track', None)
-    
-        # Update model with track information if needed
+
         if model is None:
             model = load_model_for_evaluation(model_path, algorithm, track=track)
     else:
-        eval_env = setup_vecnormalize(eval_env, vecnorm_path, model_path)
         model = load_model_for_evaluation(model_path, algorithm, model=model)
     
     # Initialize metrics and trajectory data storage
@@ -610,7 +582,7 @@ def evaluate(eval_env, model_path=None, model=None, vecnorm_path=None):
             
             # Run a single evaluation episode
             total_reward, step_count, episode_time, episode_positions, episode_velocities, episode_desired_velocities, episode_steering_angles = run_evaluation_episode(
-                eval_env, model, env_idx, is_vec_env, is_recurrent
+                eval_env, model, is_recurrent, env_idx=env_idx
             )
             
             # Record metrics for this environment
@@ -633,28 +605,10 @@ def evaluate(eval_env, model_path=None, model=None, vecnorm_path=None):
     # Plot velocity profiles if we have collected data
     any_data = any(len(pos) > 0 for pos in env_positions)
     if any_data and FLAGS.plot_in_eval:
-        try:
-            plot_velocity_profiles(env_positions, env_velocities, env_params, num_envs, track, model_path, algorithm)
-        except Exception as e:
-            logging.error(f"Error generating velocity profile plots: {e}")
-        
-        # Plot acceleration profiles
-        try:
-            plot_acceleration_profiles(env_positions, env_velocities, env_params, num_envs, track, model_path, algorithm)
-        except Exception as e:
-            logging.error(f"Error generating acceleration profile plots: {e}")
-        
-        # Plot velocity vs time profiles (now with both observed and desired velocities)
-        try:
-            plot_velocity_time_profiles(env_velocities, env_desired_velocities, env_episode_lengths, env_params, num_envs, num_episodes, model_path, algorithm)
-        except Exception as e:
-            logging.error(f"Error generating velocity vs time profile plots: {e}")
-        
-        # Plot steering angle vs time profiles
-        try:
-            plot_steering_time_profiles(env_steering_angles, env_episode_lengths, env_params, num_envs, num_episodes, model_path, algorithm)
-        except Exception as e:
-            logging.error(f"Error generating steering angle vs time profile plots: {e}")
+        plot_velocity_profiles(env_positions, env_velocities, env_params, num_envs, track, model_path, algorithm)
+        plot_acceleration_profiles(env_positions, env_velocities, env_params, num_envs, track, model_path, algorithm)
+        plot_velocity_time_profiles(env_velocities, env_desired_velocities, env_episode_lengths, env_params, num_envs, num_episodes, model_path, algorithm)
+        plot_steering_time_profiles(env_steering_angles, env_episode_lengths, env_params, num_envs, num_episodes, model_path, algorithm)
     
     # Compute statistics from evaluation results
     return compute_statistics(env_episode_rewards, env_episode_lengths, env_lap_times, env_velocities, num_envs)
@@ -662,20 +616,6 @@ def evaluate(eval_env, model_path=None, model=None, vecnorm_path=None):
 def initialize_with_imitation_learning(model, env, imitation_policy_type="PURE_PURSUIT", total_transitions=1000_000, racing_mode=False, algorithm="SAC"):
     """
     Initialize a reinforcement learning model using imitation learning from a specified policy.
-    
-    Args:
-        model: The RL model to initialize
-        env: The environment (must be a VecEnv) to collect demonstrations from.
-        imitation_policy_type: Type of imitation policy (WALL_FOLLOW, PURE_PURSUIT, or LATTICE)
-        total_transitions: Total number of transitions to collect across all environments
-        racing_mode: Whether to use racing mode with two cars for overtaking scenarios
-        algorithm: The RL algorithm type (e.g., "SAC", "PPO", "RECURRENT_PPO")
-    
-    Returns:
-        model: The initialized model
-        
-    Raises:
-        TypeError: If env is not a VecEnv instance
     """
     # Check if env is a VecEnv and raise an error if it's not
     if not isinstance(env, (DummyVecEnv, SubprocVecEnv, VecNormalize)):
@@ -711,14 +651,6 @@ def initialize_with_imitation_learning(model, env, imitation_policy_type="PURE_P
 def initialize_expert_policies(vec_env, imitation_policy_type, racing_mode):
     """
     Initialize expert policies for each environment.
-    
-    Args:
-        vec_env: The vector environment
-        imitation_policy_type: Type of imitation policy
-        racing_mode: Whether racing mode is enabled
-        
-    Returns:
-        List of expert policies
     """
     # Import policies for imitation learning
     from wall_follow import WallFollowPolicy
@@ -751,17 +683,6 @@ def initialize_expert_policies(vec_env, imitation_policy_type, racing_mode):
 def collect_expert_rollouts(model, env, raw_vec_env, expert_policies, total_transitions, is_normalized):
     """
     Collect rollouts from expert policies and filter by reward.
-    
-    Args:
-        model: The RL model
-        env: The normalized environment (if normalization is used)
-        raw_vec_env: The raw vector environment
-        expert_policies: List of expert policies
-        total_transitions: Target total number of transitions to collect
-        is_normalized: Whether environment is normalized
-        
-    Returns:
-        List of lists: transitions_by_env[env_idx] = [(obs, action, reward, next_obs, done), ...]
     """
     # Calculate per-environment transition quota to ensure balanced data collection
     num_envs = raw_vec_env.num_envs
@@ -878,14 +799,6 @@ def collect_expert_rollouts(model, env, raw_vec_env, expert_policies, total_tran
 def pretrain_off_policy(model, demonstrations, num_envs):
     """
     Pretrain off-policy algorithms (SAC, TD3, DDPG) using demonstrations in the replay buffer.
-    
-    Args:
-        model: The RL model to train (must have replay_buffer)
-        demonstrations: List of lists - demonstrations[env_idx] = [(obs, action, reward, next_obs, done), ...]
-        num_envs: Number of environments used to collect demonstrations
-        
-    Returns:
-        Trained model
     """
     if not hasattr(model, 'replay_buffer'):
         logging.warning("Model does not have a replay buffer. Skipping off-policy pretraining.")
@@ -934,6 +847,8 @@ def pretrain_off_policy(model, demonstrations, num_envs):
             batch_done = np.array(batch_done_list)
             
             infos = [{} for _ in range(num_envs)]
+
+            # TODO: check the interface
             model.replay_buffer.add(batch_obs, batch_next_obs, batch_action, batch_reward, batch_done, infos)
     
     # Perform gradient steps on the demonstrations
@@ -956,14 +871,6 @@ def pretrain_off_policy(model, demonstrations, num_envs):
 def pretrain_on_policy(model, demonstrations, env):
     """
     Pretrain on-policy algorithms (PPO, RecurrentPPO) using behavior cloning.
-    
-    Args:
-        model: The RL model to train
-        demonstrations: List of lists - demonstrations[env_idx] = [(obs, action, reward, next_obs, done), ...]
-        env: The environment (needed for observation/action space)
-        
-    Returns:
-        Trained model
     """
     if not demonstrations or all(len(env_demos) == 0 for env_demos in demonstrations):
         logging.info("No demonstration transitions to pretrain on. Skipping behavior cloning.")
@@ -1172,22 +1079,70 @@ def make_env(env_id, rank, seed=0, env_kwargs=None):
     # set_global_seeds(seed) # Deprecated in SB3
     return _init
 
-def create_vec_env(env_kwargs, seed, normalize_obs=True, normalize_reward=True):
+def generate_param_combinations(seed: int, num_param_cmbs: int) -> List[dict]:
     """
-    Creates vectorized environments for training and evaluation.
-
-    Args:
-        env_kwargs (dict): Base arguments for the F110GymWrapper environment.
-        seed (int): Random seed.
-        normalize_obs (bool): Whether to normalize observations.
-        normalize_reward (bool): Whether to normalize rewards.
-
-    Returns:
-        VecEnv: The vectorized environment, optionally wrapped with VecNormalize.
-        
-    Note:
-        All other parameters are read from FLAGS singleton.
+    Generate domain randomization parameter combinations deterministically.
+    Returns a list of parameter dicts of length num_param_cmbs.
     """
+    param_combinations: List[dict] = []
+    for i in range(num_param_cmbs):
+        param_seed = seed + i
+        rng = np.random.default_rng(param_seed)
+        param_set = {
+            'mu': float(rng.uniform(0.8, 1.1)),
+            'C_Sf': float(rng.uniform(4.0, 5.5)),
+            'C_Sr': float(rng.uniform(4.0, 5.5)),
+            'm': float(rng.uniform(3.0, 4.5)),
+            'I': float(rng.uniform(0.03, 0.06)),
+            'lidar_noise_stddev': float(rng.uniform(0.0, 0.1)),
+            's_noise_stddev': float(rng.uniform(0.0, 1)),
+            'ey_noise_stddev': float(rng.uniform(0.0, 0.5)),
+            'vel_noise_stddev': float(rng.uniform(0.0, 0.5)),
+            'yaw_noise_stddev': float(rng.uniform(0, 0.5)),
+        }
+        param_set['push_0_prob'] = float(rng.uniform(0.0, 0.1))
+        param_set['push_2_prob'] = float(rng.uniform(0.0, 0.05))
+
+        logging.info(
+            f"Param Set {i} Parameters: mu: {param_set['mu']}, C_Sf: {param_set['C_Sf']}, C_Sr: {param_set['C_Sr']}, m: {param_set['m']}, I: {param_set['I']}; "
+            f"Observation noise: lidar_noise_stddev: {param_set['lidar_noise_stddev']}, s: {param_set['s_noise_stddev']}, ey: {param_set['ey_noise_stddev']}, vel: {param_set['vel_noise_stddev']}, yaw: {param_set['yaw_noise_stddev']}; "
+            f"Push probabilities: push_0_prob: {param_set['push_0_prob']}, push_2_prob: {param_set['push_2_prob']}"
+        )
+        param_combinations.append(param_set)
+
+    return param_combinations
+
+def expand_env_kwargs_for_envs(
+    base_env_kwargs: dict,
+    param_combinations: List[dict],
+    num_envs: int,
+    include_params_in_obs: bool,
+    lidar_scan_in_obs_mode: str,
+    racing_mode: bool
+) -> List[dict]:
+    """
+    Create per-env kwargs by combining base kwargs with DR parameter combinations and flags.
+    If param_combinations is empty, only flags are applied.
+    """
+    per_env_kwargs: List[dict] = []
+    for i in range(num_envs):
+        current_env_kwargs = base_env_kwargs.copy()
+        current_env_kwargs['include_params_in_obs'] = include_params_in_obs
+        current_env_kwargs['lidar_scan_in_obs_mode'] = lidar_scan_in_obs_mode
+        if 'racing_mode' not in current_env_kwargs:
+            current_env_kwargs['racing_mode'] = racing_mode
+
+        if param_combinations:
+            param_idx = i % len(param_combinations)
+            for key, value in param_combinations[param_idx].items():
+                current_env_kwargs[key] = value
+            logging.info(f"Env {i} using parameter set {param_idx}")
+
+        per_env_kwargs.append(current_env_kwargs)
+
+    return per_env_kwargs
+
+def create_vec_env(env_kwargs, seed):
     # Read parameters from FLAGS
     num_envs = FLAGS.num_envs
     num_param_cmbs = FLAGS.num_param_cmbs
@@ -1203,83 +1158,88 @@ def create_vec_env(env_kwargs, seed, normalize_obs=True, normalize_reward=True):
     elif use_domain_randomization and num_param_cmbs < 1:
         num_param_cmbs = 1
         logging.warning(f"num_param_cmbs must be at least 1 for domain randomization. Setting to 1.")
-    
+
     # Generate parameter combinations first if using domain randomization
-    param_combinations = []
+    param_combinations: List[dict] = []
     if use_domain_randomization and num_param_cmbs > 0:
-        # Create the specified number of parameter combinations
-        for i in range(num_param_cmbs):
-            param_seed = seed + i
-            rng = np.random.default_rng(param_seed)
-            param_set = {
-                'mu': rng.uniform(0.8, 1.1),
-                'C_Sf': rng.uniform(4.0, 5.5),
-                'C_Sr': rng.uniform(4.0, 5.5),
-                'm': rng.uniform(3.0, 4.5),
-                'I': rng.uniform(0.03, 0.06),
-                'lidar_noise_stddev': rng.uniform(0.0, 0.1),
-                's_noise_stddev': rng.uniform(0.0, 1),
-                'ey_noise_stddev': rng.uniform(0.0, 0.5),
-                'vel_noise_stddev': rng.uniform(0.0, 0.5),
-                'yaw_noise_stddev': rng.uniform(0, 0.5)
-            }
-            param_set['push_0_prob'] = rng.uniform(0.0, 0.1)
-            param_set['push_2_prob'] = rng.uniform(0.0, 0.05)
-            
-            logging.info(
-                f"Param Set {i} Parameters: mu: {param_set['mu']}, C_Sf: {param_set['C_Sf']}, C_Sr: {param_set['C_Sr']}, m: {param_set['m']}, I: {param_set['I']}; "
-                f"Observation noise: lidar_noise_stddev: {param_set['lidar_noise_stddev']}, s: {param_set['s_noise_stddev']}, ey: {param_set['ey_noise_stddev']}, vel: {param_set['vel_noise_stddev']}, yaw: {param_set['yaw_noise_stddev']}; "
-                f"Push probabilities: push_0_prob: {param_set['push_0_prob']}, push_2_prob: {param_set['push_2_prob']}"
-            )
-            param_combinations.append(param_set)
+        param_combinations = generate_param_combinations(seed=seed, num_param_cmbs=num_param_cmbs)
     
     # --- Create Environment(s) ---
+    # Create per-env kwargs list
+    per_env_kwargs = expand_env_kwargs_for_envs(
+        base_env_kwargs=env_kwargs,
+        param_combinations=param_combinations,
+        num_envs=num_envs,
+        include_params_in_obs=include_params_in_obs,
+        lidar_scan_in_obs_mode=lidar_scan_in_obs_mode,
+        racing_mode=racing_mode
+    )
+
+    # Create the vectorized environment thunks
     env_fns = []
-    for i in range(num_envs):
-        rank_seed = seed + i
-        current_env_kwargs = env_kwargs.copy()
-        current_env_kwargs['include_params_in_obs'] = include_params_in_obs
-        current_env_kwargs['lidar_scan_in_obs_mode'] = lidar_scan_in_obs_mode
-        
-        # Ensure racing_mode is passed to environment
-        if 'racing_mode' not in current_env_kwargs:
-            current_env_kwargs['racing_mode'] = racing_mode
-        
-        if use_domain_randomization and param_combinations:
-            # Select parameter set from the combinations we created
-            # Each parameter set is used for (num_envs / num_param_cmbs) environments
-            param_idx = i % num_param_cmbs
-            param_set = param_combinations[param_idx]
-            
-            # Assign parameters to this environment
-            for key, value in param_set.items():
-                current_env_kwargs[key] = value
-            
-            logging.info(f"Env {i} using parameter set {param_idx}")
-        
-        # Create the thunk (function) for this env instance
-        # Use partial to pass the potentially modified kwargs
-        env_fn = partial(make_env(env_id=f"f110-rank{i}", rank=i, seed=seed, env_kwargs=current_env_kwargs))
+    for i, kwargs_i in enumerate(per_env_kwargs):
+        env_fn = partial(make_env(env_id=f"f110-rank{i}", rank=i, seed=seed, env_kwargs=kwargs_i))
         env_fns.append(env_fn)
         
     # Create the vectorized environment
     vec_env_cls = DummyVecEnv if num_envs == 1 else SubprocVecEnv
     vec_env = vec_env_cls(env_fns)
     
-    # Optionally wrap with VecNormalize
-    if normalize_obs or normalize_reward:
-        from stable_baselines3.common.vec_env import VecNormalize
-        vec_env = VecNormalize(
-            vec_env,
-            norm_obs=normalize_obs,
-            norm_reward=normalize_reward,
-            clip_obs=10.0,
-            clip_reward=10.0,
-            gamma=0.99,
-            epsilon=1e-8,
-        )
-        logging.info(f"Environment wrapped with VecNormalize (norm_obs={normalize_obs}, norm_reward={normalize_reward})")
-    
+    return vec_env
+
+def setup_vecnormalize_env_train(vec_env) -> VecNormalize | Any:
+    """
+    Wrap the environment with VecNormalize for training when using an RL algorithm.
+
+    Returns the possibly wrapped environment with training flags enabled.
+    """
+    algorithm = FLAGS.algorithm
+    rl_algorithms = {"SAC", "PPO", "RECURRENT_PPO", "DDPG", "TD3"}
+    if algorithm not in rl_algorithms:
+        return vec_env
+
+    # Always create a training VecNormalize wrapper (do not pre-check existing wrappers)
+    vec_env = VecNormalize(
+        vec_env,
+        norm_obs=True,
+        norm_reward=True,
+        clip_obs=10.0,
+        clip_reward=10.0,
+        gamma=0.99,
+        epsilon=1e-8,
+    )
+    vec_env.training = True
+    vec_env.norm_reward = True
+    logging.info("VecNormalize wrapper initialized for training")
+    return vec_env
+
+def setup_vecnormalize_env_eval(vec_env, model_path: Optional[str], vecnorm_path: Optional[str]) -> VecNormalize | Any:
+    """
+    Load VecNormalize statistics for evaluation when using an RL algorithm.
+
+    If statistics are found, returns a VecNormalize wrapper with training disabled.
+    Otherwise, returns the environment unchanged.
+    """
+    algorithm = FLAGS.algorithm
+    rl_algorithms = {"SAC", "PPO", "RECURRENT_PPO", "DDPG", "TD3"}
+    if algorithm not in rl_algorithms:
+        return vec_env
+
+    # Resolve stats path
+    resolved_path = vecnorm_path
+    if (resolved_path is None or not os.path.exists(resolved_path)) and model_path is not None:
+        model_dir = os.path.dirname(model_path)
+        potential_vecnorm_path = os.path.join(model_dir, "vec_normalize.pkl")
+        if os.path.exists(potential_vecnorm_path):
+            resolved_path = potential_vecnorm_path
+
+    if resolved_path is not None and os.path.exists(resolved_path):
+        vec_env = VecNormalize.load(resolved_path, vec_env)
+        vec_env.training = False
+        vec_env.norm_reward = False
+        logging.info(f"Loaded VecNormalize statistics from {resolved_path} for evaluation")
+    else:
+        logging.warning("No VecNormalize statistics found for evaluation; proceeding without normalization")
     return vec_env
 
 # Updated train function to handle VecEnv and Domain Randomization

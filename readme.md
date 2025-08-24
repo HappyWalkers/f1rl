@@ -93,4 +93,4 @@ This project use recurrent policy for reinforcement learning, domain randomizati
 This is an active project. Current progress and ideas are tracked in:
 
 - **Slides**: https://docs.google.com/presentation/d/1MN3k4OcoNS2_rCE4_UrtA76lchaS4XlhmnMyM7rifgE/edit?usp=sharing
-- **Todo List**: https://docs.google.com/document/d/1KLnU6vMZAfi7sqKzXk04mfPIC0vFzXK4BlMCgbjqpX0/edit?usp=sharing
+- **Todo List**: ./TaskList.md

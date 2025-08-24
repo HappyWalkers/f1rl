@@ -19,9 +19,6 @@ This document captures the detailed standards, conventions, and expectations for
 ## Non‑Negotiable Standards
 
 - Type hints everywhere (functions, classes, public APIs)
-- Google‑style docstrings for public methods
-- Logging via `absl.logging`
-- Configuration via `absl.flags`; YAML files for experiment configs
 
 ## Environment and Project Mandates
 
@@ -35,8 +32,6 @@ This document captures the detailed standards, conventions, and expectations for
 
 - Algorithms: PPO, SAC, and recurrent PPO (preferred for temporal tasks)
 - Vectorized envs: maximize parallelism while staying memory‑safe
-- Gradient clipping for stability; learning rate scheduling encouraged
-- Regular checkpointing and validation runs
 
 ## Expert Policies and Planners
 
@@ -58,7 +53,6 @@ These are useful for imitation learning and for safety fallbacks.
 
 ## Configuration Management
 
-- Use `absl.flags` for command‑line arguments and YAML for experiment configs
 - Log all hyperparameters, seeds, and environment parameters
 - Keep default configurations conservative and reproducible
 
@@ -74,10 +68,7 @@ These are useful for imitation learning and for safety fallbacks.
 
 ## Training Stability
 
-- Gradient clipping (e.g., global norm)
-- Learning rate warmup/decay schedules
 - Normalize observations and rewards where beneficial
-- Early stopping or plateaus with patience
 
 ## Reproducibility
 
@@ -115,8 +106,6 @@ f1tenth_gym/rl/
 ## Code Review Checklist
 
 - [ ] All functions have proper type annotations
-- [ ] Google‑style docstrings for all public methods
-- [ ] Specific error handling; no silent catches
 - [ ] Logging for important events and errors
 - [ ] Performance considerations addressed (batching, vectorization)
 - [ ] Memory usage optimized
