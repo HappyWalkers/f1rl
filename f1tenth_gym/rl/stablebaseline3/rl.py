@@ -14,17 +14,17 @@ import numpy as np
 import datetime
 from tqdm import tqdm
 from typing import Tuple, List, Optional, Any
-from rl_env import F110GymWrapper # Import the wrapper
-from stablebaseline3.feature_extractor import F1TenthFeaturesExtractor, MLPFeaturesExtractor, ResNetFeaturesExtractor, TransformerFeaturesExtractor, MoEFeaturesExtractor
+from ..rl_env import F110GymWrapper # Import the wrapper
+from .feature_extractor import F1TenthFeaturesExtractor, MLPFeaturesExtractor, ResNetFeaturesExtractor, TransformerFeaturesExtractor, MoEFeaturesExtractor
 from sortedcontainers import SortedList
-from stablebaseline3.analyze import *
+from .analyze import *
 from imitation.algorithms import bc
 from imitation.data import types as data_types
 from imitation.data.rollout import flatten_trajectories
-from wall_follow import WallFollowPolicy
-from pure_pursuit import PurePursuitPolicy
-from lattice_planner import LatticePlannerPolicy
-from utils.Track import Track
+from ..wall_follow import WallFollowPolicy
+from ..pure_pursuit import PurePursuitPolicy
+from ..lattice_planner import LatticePlannerPolicy
+from ..utils.Track import Track
 
 import torch
 

@@ -14,24 +14,29 @@
         * expert policies shoud use raw observation for convenience; the imitation learning phase can use unnormalized observations for expert policies and keep the normalized observations for training
           * for off-policy methods, the train method of model will sample raw observations and rewards from buffer and applies normalization if vecnorm is available
           * for on-policy methods, the BC seems to use the transitions directly, so we may need to use normalized observations and rewards
-  * fix expert policies
-    * wall following
-    * pure pursuit
-    * lattice planner
+  * ~~fix expert policies~~
+    * ~~wall following~~
+    * ~~pure pursuit~~
+    * ~~lattice planner~~
   * write some tests
     * use reward to check the functionality of expert policies and RL policies
   * avoid too flexible code
     * use type annotation to limit the type used
   * add more logs to increase the understanding of the codebase
   * maybe we should stop using vecnorm and use some basic division to limit the value scale
-* Diffusion policy uses receding horizon control that reminds me of MPC. Maybe we can use that too
 
+* Diffusion policy uses receding horizon control that reminds me of MPC. Maybe we can use that too
   * Implement an MPC first
   * Use action sequence prediction in RL
+
 * bidirectional RNN -> give it a try
+
 * Get a good policy (pure pursuit, MPC, MPPI) on the real car & use that policy as the expert policy. Maybe RL fine tuning is a bad idea because it trains a policy only working well in sim and increase the sim-to-real gap. The quality of the policy purely depends on the quality of the simulation.
+
 * use MPC to replace the dynamic part and use the rl policy as the planner
+
 * use model-based rl and use the model’s error to measure the accuracy of the dynamic part. Another advantage of model-based rl is that we can use real-world data to fine tune the dynamic model.
+
 * Modify the command delay model. The min delay is one step
 * Reduce observation noise
 * Action noise

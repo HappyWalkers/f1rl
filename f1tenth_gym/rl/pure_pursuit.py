@@ -1,6 +1,6 @@
 import numpy as np
 from absl import logging
-from utils.Track import Track
+from .utils.Track import Track
 
 class PurePursuitPolicy:
     """

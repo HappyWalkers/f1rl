@@ -16,18 +16,15 @@ from skrl.models.torch import Model
 from absl import app
 from absl import flags
 from absl import logging
-import sk
-import stablebaseline3
-from rl_env import F110GymWrapper
+from .rl_env import F110GymWrapper
 from stable_baselines3.common.utils import set_random_seed
-import stablebaseline3.rl
-from stablebaseline3.rl import (ALGO_SAC, ALGO_PPO, ALGO_RECURRENT_PPO, ALGO_DDPG, ALGO_TD3, 
+from .stablebaseline3 import rl as sbrl
+from .stablebaseline3.rl import (ALGO_SAC, ALGO_PPO, ALGO_RECURRENT_PPO, ALGO_DDPG, ALGO_TD3, 
                                 ALGO_WALL_FOLLOW, ALGO_PURE_PURSUIT, ALGO_LATTICE)
-from utils.Track import Track
-from utils import utils
+from .utils.Track import Track
+from .utils import utils
 from matplotlib import pyplot as plt
 from PIL import Image
-import wandb
 
 FLAGS = flags.FLAGS
 
@@ -71,7 +68,8 @@ def initialize_wandb():
     if FLAGS.wandb_run_name is None:
         raise ValueError("wandb_run_name is required when use_wandb=True. Please specify --wandb_run_name.")
     
-    # Initialize wandb
+    # Initialize wandb (lazy import to avoid hard dependency in tests)
+    import wandb
     run = wandb.init(
         project="f1tenth-rl",
         entity=None,  # Use default entity
@@ -98,7 +96,10 @@ def wandb_run_main(argv):
     finally:
         # Clean up WandB
         if wandb_run:
-            wandb.finish()
+            try:
+                wandb_run.finish()
+            except Exception:
+                pass
 
 
 def main(argv):
@@ -141,23 +142,23 @@ def main(argv):
 
     # Branch based on mode (train or evaluate)
     # Build a vectorized env for both training and evaluation
-    vec_env = stablebaseline3.rl.create_vec_env(
+    vec_env = sbrl.create_vec_env(
         env_kwargs=base_env_kwargs,
         seed=FLAGS.seed
     )
 
     if FLAGS.eval:
-        vec_env = stablebaseline3.rl.setup_vecnormalize_env_eval(
+        vec_env = sbrl.setup_vecnormalize_env_eval(
             vec_env=vec_env,
             model_path=FLAGS.model_path,
             vecnorm_path=FLAGS.vecnorm_path,
         )
-        stablebaseline3.rl.evaluate(eval_env=vec_env)
+        return sbrl.evaluate(eval_env=vec_env)
     else:
-        vec_env = stablebaseline3.rl.setup_vecnormalize_env_train(
+        vec_env = sbrl.setup_vecnormalize_env_train(
             vec_env=vec_env,
         )
-        stablebaseline3.rl.train(env=vec_env, seed=FLAGS.seed)
+        return sbrl.train(env=vec_env, seed=FLAGS.seed)
 
 
 if __name__ == "__main__":

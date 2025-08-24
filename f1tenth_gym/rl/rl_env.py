@@ -5,9 +5,9 @@ import torch
 from gymnasium import spaces
 import random
 from absl import logging
-from utils.Track import Track
+from .utils.Track import Track
 import collections
-from pure_pursuit import PurePursuitPolicy
+from .pure_pursuit import PurePursuitPolicy
 
 
 class F110GymWrapper(gymnasium.Env):
