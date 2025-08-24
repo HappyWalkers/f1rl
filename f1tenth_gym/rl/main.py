@@ -21,6 +21,8 @@ import stablebaseline3
 from rl_env import F110GymWrapper
 from stable_baselines3.common.utils import set_random_seed
 import stablebaseline3.rl
+from stablebaseline3.rl import (ALGO_SAC, ALGO_PPO, ALGO_RECURRENT_PPO, ALGO_DDPG, ALGO_TD3, 
+                                ALGO_WALL_FOLLOW, ALGO_PURE_PURSUIT, ALGO_LATTICE)
 from utils.Track import Track
 from utils import utils
 from matplotlib import pyplot as plt
@@ -48,7 +50,7 @@ flags.DEFINE_integer("map_index", 63, "Index of the map to use")
 flags.DEFINE_string("logging_level", "INFO", "Logging level")
 flags.DEFINE_string("model_path", "./logs/best_model/best_model.zip", "Path to the model to evaluate")
 flags.DEFINE_string("vecnorm_path", "./logs/best_model/vec_normalize.pkl", "Path to the VecNormalize statistics file. If None, will try to infer from model_path.")
-flags.DEFINE_enum("algorithm", "RECURRENT_PPO", ["SAC", "PPO", "RECURRENT_PPO", "DDPG", "TD3", "WALL_FOLLOW", "PURE_PURSUIT", "LATTICE"], "Algorithm used")
+flags.DEFINE_enum("algorithm", ALGO_RECURRENT_PPO, [ALGO_SAC, ALGO_PPO, ALGO_RECURRENT_PPO, ALGO_DDPG, ALGO_TD3, ALGO_WALL_FOLLOW, ALGO_PURE_PURSUIT, ALGO_LATTICE], "Algorithm used")
 flags.DEFINE_enum("feature_extractor", "RESNET", ["MLP", "RESNET", "FILM", "TRANSFORMER", "MOE"], "Feature extractor architecture to use")
 
 # WandB flags

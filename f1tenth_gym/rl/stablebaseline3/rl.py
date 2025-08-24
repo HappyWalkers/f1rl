@@ -30,8 +30,20 @@ import torch
 
 FLAGS = flags.FLAGS
 
+# Algorithm constants
+ALGO_SAC = "sac"
+ALGO_PPO = "ppo"
+ALGO_RECURRENT_PPO = "recurrent_ppo"
+ALGO_DDPG = "ddpg"
+ALGO_TD3 = "td3"
+ALGO_DQN = "dqn"
+ALGO_A2C = "a2c"
+ALGO_WALL_FOLLOW = "wall_follow"
+ALGO_PURE_PURSUIT = "pure_pursuit"
+ALGO_LATTICE = "lattice"
+
 def is_rl_policy(algorithm: str) -> bool:
-    if algorithm in ['PPO', 'RecurrentPPO', 'SAC', 'TD3', 'DDPG', 'DQN', 'A2C']:
+    if algorithm in [ALGO_PPO, ALGO_RECURRENT_PPO, ALGO_SAC, ALGO_TD3, ALGO_DDPG, ALGO_DQN, ALGO_A2C]:
         return True
     return False
 
@@ -373,21 +385,21 @@ def create_sac(env, seed):
 
 def load_model_for_evaluation(algorithm: str, model_path: str = None, track: Track = None):
     """Loads or returns the model for evaluation based on algorithm type."""
-    if algorithm == "WALL_FOLLOW":
+    if algorithm == ALGO_WALL_FOLLOW:
         return WallFollowPolicy()
-    elif algorithm == "PURE_PURSUIT":
+    elif algorithm == ALGO_PURE_PURSUIT:
         return PurePursuitPolicy(track=track)
-    elif algorithm == "LATTICE":
+    elif algorithm == ALGO_LATTICE:
         return LatticePlannerPolicy(track=track, lidar_scan_in_obs_mode=FLAGS.lidar_scan_in_obs_mode)
-    elif algorithm == "PPO":
+    elif algorithm == ALGO_PPO:
         return PPO.load(model_path)
-    elif algorithm == "RECURRENT_PPO":
+    elif algorithm == ALGO_RECURRENT_PPO:
         return RecurrentPPO.load(model_path)
-    elif algorithm == "DDPG":
+    elif algorithm == ALGO_DDPG:
         return DDPG.load(model_path)
-    elif algorithm == "TD3":
+    elif algorithm == ALGO_TD3:
         return TD3.load(model_path)
-    elif algorithm == "SAC":
+    elif algorithm == ALGO_SAC:
         return SAC.load(model_path)
     else:
         raise ValueError(f"Unsupported algorithm: {algorithm}")
@@ -457,7 +469,7 @@ def run_evaluation_episode(eval_env: DummyVecEnv | SubprocVecEnv | VecNormalize,
         elif hasattr(action, '__len__') and len(action) == 1:
             # Some policies might only output steering, use observed (RAW) velocity
             desired_velocity = float(obs_raw[2]) if len(obs_raw) > 2 else 0.0
-        elif FLAGS.algorithm in ["WALL_FOLLOW", "PURE_PURSUIT", "LATTICE"]:
+        elif FLAGS.algorithm in [ALGO_WALL_FOLLOW, ALGO_PURE_PURSUIT, ALGO_LATTICE]:
             desired_velocity = float(action[1])
         else:
             # Fallback for other action formats
@@ -554,7 +566,7 @@ def evaluate(eval_env):
     env_steering_angles = [[] for _ in range(num_envs)]  # New: store steering angles
     env_params = [None for _ in range(num_envs)]
     
-    is_recurrent = algorithm == "RECURRENT_PPO" or (hasattr(model, 'policy') and hasattr(model.policy, '_initial_state'))
+    is_recurrent = algorithm == ALGO_RECURRENT_PPO or (hasattr(model, 'policy') and hasattr(model.policy, '_initial_state'))
     
     # Evaluate on each environment
     for env_idx in range(num_envs):
@@ -1249,15 +1261,15 @@ def train(env, seed):
     
     # --- Create Model ---
     logging.info(f"Creating {algorithm} model with {feature_extractor_name} feature extractor")
-    if algorithm == "PPO":
+    if algorithm == ALGO_PPO:
         model = create_ppo(env, seed)
-    elif algorithm == "RECURRENT_PPO":
+    elif algorithm == ALGO_RECURRENT_PPO:
         model = create_recurrent_ppo(env, seed)
-    elif algorithm == "DDPG":
+    elif algorithm == ALGO_DDPG:
         model = create_ddpg(env, seed)
-    elif algorithm == "TD3":
+    elif algorithm == ALGO_TD3:
         model = create_td3(env, seed)
-    elif algorithm == "SAC":
+    elif algorithm == ALGO_SAC:
         model = create_sac(env, seed)
     else:
         raise ValueError(f"Unsupported algorithm: {algorithm}")

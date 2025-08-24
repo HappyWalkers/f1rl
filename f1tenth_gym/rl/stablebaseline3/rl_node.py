@@ -25,6 +25,7 @@ from typing import Tuple
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
 from utils.Track import Track
 from utils import utils # Added import
+from stablebaseline3.rl import ALGO_RECURRENT_PPO, ALGO_SAC
 
 class DummyEnv(gymnasium.Env):
     """
@@ -56,7 +57,7 @@ class RLF1TenthController(Node):
     """
     ROS Node that uses a trained RL model to control an F1Tenth car
     """
-    def __init__(self, algorithm="SAC", model_path="./logs/best_model/best_model.zip", 
+    def __init__(self, algorithm=ALGO_SAC, model_path="./logs/best_model/best_model.zip", 
                  vecnorm_path=None, map_index=63, map_dir_="./f1tenth_racetracks/",
                  lidar_scan_in_obs_mode="FULL", enable_lidar_plot=True):
         super().__init__('rl_f1tenth_controller')
@@ -93,7 +94,7 @@ class RLF1TenthController(Node):
         self.max_steering_velocity = 3.2  # Maximum allowed steering velocity (rad/s)
         
         # For recurrent policies (LSTM state tracking)
-        self.is_recurrent = self.algorithm == "RECURRENT_PPO"
+        self.is_recurrent = self.algorithm == ALGO_RECURRENT_PPO
         self.lstm_states = None
         self.episode_starts = np.ones((1,), dtype=bool)  # Mark the start of the episode
         
@@ -162,7 +163,7 @@ class RLF1TenthController(Node):
             }
             
             # Load model based on algorithm type
-            if self.algorithm == "RECURRENT_PPO":
+            if self.algorithm == ALGO_RECURRENT_PPO:
                 self.model = RecurrentPPO.load(model_path, custom_objects=custom_objects)
                 self.get_logger().info("RecurrentPPO model loaded successfully")
             else:
@@ -1321,8 +1322,8 @@ class RLF1TenthController(Node):
 def main(args=None):
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='F1TENTH RL Controller')
-    parser.add_argument('--algorithm', type=str, default='RECURRENT_PPO', choices=['SAC', 'RECURRENT_PPO'],
-                        help='RL algorithm to use (SAC or RECURRENT_PPO)')
+    parser.add_argument('--algorithm', type=str, default=ALGO_RECURRENT_PPO, choices=[ALGO_SAC, ALGO_RECURRENT_PPO],
+                        help='RL algorithm to use (sac or recurrent_ppo)')
     parser.add_argument('--model_path', type=str, default='./logs/best_model/best_model.zip',
                         help='Path to the trained model')
     parser.add_argument('--vecnorm_path', type=str, default=None,
