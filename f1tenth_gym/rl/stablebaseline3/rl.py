@@ -21,10 +21,19 @@ from stablebaseline3.analyze import *
 from imitation.algorithms import bc
 from imitation.data import types as data_types
 from imitation.data.rollout import flatten_trajectories
+from wall_follow import WallFollowPolicy
+from pure_pursuit import PurePursuitPolicy
+from lattice_planner import LatticePlannerPolicy
+from utils.Track import Track
 
 import torch
 
 FLAGS = flags.FLAGS
+
+def is_rl_policy(algorithm: str) -> bool:
+    if algorithm in ['PPO', 'RecurrentPPO', 'SAC', 'TD3', 'DDPG', 'DQN', 'A2C']:
+        return True
+    return False
 
 # Function to select feature extractor based on name
 def get_feature_extractor_class(feature_extractor_name):
@@ -362,47 +371,31 @@ def create_sac(env, seed):
     )
     return model
 
-def load_model_for_evaluation(model_path, algorithm, model=None, track=None):
+def load_model_for_evaluation(algorithm: str, model_path: str = None, track: Track = None):
     """Loads or returns the model for evaluation based on algorithm type."""
     if algorithm == "WALL_FOLLOW":
-        from wall_follow import WallFollowPolicy
-        logging.info("Using wall-following policy for evaluation")
         return WallFollowPolicy()
     elif algorithm == "PURE_PURSUIT":
-        from pure_pursuit import PurePursuitPolicy
-        logging.info("Using pure pursuit policy for evaluation")
         return PurePursuitPolicy(track=track)
     elif algorithm == "LATTICE":
-        from lattice_planner import LatticePlannerPolicy
-        logging.info("Using lattice planner policy for evaluation")
         return LatticePlannerPolicy(track=track, lidar_scan_in_obs_mode=FLAGS.lidar_scan_in_obs_mode)
-    elif model is None:
-        logging.info(f"Loading {algorithm} model from {model_path}")
-        
-        if algorithm == "PPO":
-            return PPO.load(model_path)
-        elif algorithm == "RECURRENT_PPO":
-            return RecurrentPPO.load(model_path)
-        elif algorithm == "DDPG":
-            return DDPG.load(model_path)
-        elif algorithm == "TD3":
-            return TD3.load(model_path)
-        elif algorithm == "SAC":
-            return SAC.load(model_path)
-        else:
-            raise ValueError(f"Unsupported algorithm: {algorithm}")
+    elif algorithm == "PPO":
+        return PPO.load(model_path)
+    elif algorithm == "RECURRENT_PPO":
+        return RecurrentPPO.load(model_path)
+    elif algorithm == "DDPG":
+        return DDPG.load(model_path)
+    elif algorithm == "TD3":
+        return TD3.load(model_path)
+    elif algorithm == "SAC":
+        return SAC.load(model_path)
     else:
-        logging.info("Using provided model for evaluation")
-        return model
+        raise ValueError(f"Unsupported algorithm: {algorithm}")
 
  
 
 def run_evaluation_episode(eval_env: DummyVecEnv | SubprocVecEnv | VecNormalize, model, is_recurrent: bool, env_idx: int = 0) -> Tuple[float, int, float, List[tuple], List[float], List[float], List[float]]:
     """Runs a single evaluation episode on a specific vectorized env index and returns metrics.
-
-    This uses env_method to control a single sub-environment, which bypasses VecNormalize.
-    To preserve the normalization used during training, we manually normalize observations
-    with VecNormalize.normalize_obs() when available, while keeping raw observations for metrics.
     """
     # Reset only the specified environment (returns raw obs from underlying env)
     obs_raw = eval_env.env_method('reset', indices=[env_idx])[0]
@@ -537,29 +530,19 @@ def extract_position_velocity(obs, env, agent_idx=0, info=None):
         
     return position, velocity
 
-def evaluate(eval_env, model_path=None, model=None):
+def evaluate(eval_env):
     # Read parameters from FLAGS
     algorithm = FLAGS.algorithm
     num_episodes = FLAGS.num_eval_episodes
     racing_mode = FLAGS.racing_mode
-    
-    # Set default paths from FLAGS if not provided
-    if model_path is None:
-        model_path = FLAGS.model_path
-    
-    # Vectorized env (Dummy or Subproc or VecNormalize)
-    num_envs = getattr(eval_env, 'num_envs', 1)
+    model_path = FLAGS.model_path
+    num_envs = FLAGS.num_envs
 
-    # Initialize track for expert policies (raw env only)
-    track = None
-    if algorithm in ["WALL_FOLLOW", "PURE_PURSUIT", "LATTICE"]:
-        if hasattr(eval_env, 'get_attr'):
-            track = eval_env.get_attr("track", indices=0)[0]
-
-        if model is None:
-            model = load_model_for_evaluation(model_path, algorithm, track=track)
+    if not is_rl_policy(algorithm):
+        track = eval_env.get_attr("track", indices=0)[0]
+        model = load_model_for_evaluation(algorithm, track=track)
     else:
-        model = load_model_for_evaluation(model_path, algorithm, model=model)
+        model = load_model_for_evaluation(algorithm, model_path=model_path)
     
     # Initialize metrics and trajectory data storage
     env_episode_rewards = [[] for _ in range(num_envs)]
@@ -1194,8 +1177,7 @@ def setup_vecnormalize_env_train(vec_env) -> VecNormalize | Any:
     Returns the possibly wrapped environment with training flags enabled.
     """
     algorithm = FLAGS.algorithm
-    rl_algorithms = {"SAC", "PPO", "RECURRENT_PPO", "DDPG", "TD3"}
-    if algorithm not in rl_algorithms:
+    if not is_rl_policy(algorithm):
         return vec_env
 
     # Always create a training VecNormalize wrapper (do not pre-check existing wrappers)
@@ -1221,8 +1203,7 @@ def setup_vecnormalize_env_eval(vec_env, model_path: Optional[str], vecnorm_path
     Otherwise, returns the environment unchanged.
     """
     algorithm = FLAGS.algorithm
-    rl_algorithms = {"SAC", "PPO", "RECURRENT_PPO", "DDPG", "TD3"}
-    if algorithm not in rl_algorithms:
+    if not is_rl_policy(algorithm):
         return vec_env
 
     # Resolve stats path
