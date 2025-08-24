@@ -16,10 +16,12 @@
           * for on-policy methods, the BC seems to use the transitions directly, so we may need to use normalized observations and rewards
   * ~~fix expert policies~~
     * ~~wall following~~
-    * ~~pure pursuit~~
-    * ~~lattice planner~~
+    * pure pursuit
+    * lattice planner
   * write some tests
     * use reward to check the functionality of expert policies and RL policies
+      * cmd to run tests: python3 -m pytest rl/test.py
+      * cmd to run main script for evaluation: python3 -m rl.main --use_il=false --num_envs=1 --use_dr=false --num_param_cmbs=1 --eval=true --num_eval_episodes=10 --render_in_eval=false --plot_in_eval=false --algorithm=wall_follow
   * avoid too flexible code
     * use type annotation to limit the type used
   * add more logs to increase the understanding of the codebase
