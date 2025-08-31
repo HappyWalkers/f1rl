@@ -41,16 +41,19 @@ class PurePursuitPolicy:
         current_ey = observation[1]
         current_vel = observation[2]
         current_yaw_car_global = observation[3] # Car's yaw angle in the global frame
+        logging.info(f"current_s: {current_s}, current_ey: {current_ey}, current_vel: {current_vel}, current_yaw_car_global: {current_yaw_car_global}")
         
         # Get current position and track yaw from track object
         current_x, current_y, current_yaw_track = self.track.frenet_to_cartesian(current_s, current_ey, 0)
-        
+        logging.info(f"current_x: {current_x}, current_y: {current_y}, current_yaw_track: {current_yaw_track}")
+
         # Find lookahead point in Frenet frame
         lookahead_s = (current_s + self.lookahead_distance) % self.track.s_frame_max
         lookahead_point_on_centerline = self._get_lookahead_point(lookahead_s)
         
         if lookahead_point_on_centerline is None:
             # Fallback: maintain current speed, zero steering if track data unavailable
+            logging.info("Fallback: maintain current speed, zero steering if track data unavailable")
             return np.array([0.0, max(self.min_speed, current_vel)]), None
             
         # Calculate steering angle
@@ -61,9 +64,11 @@ class PurePursuitPolicy:
             lookahead_point_on_centerline, # Target point [x, y, speed, kappa]
             np.array([current_x, current_y]) # Car's actual position
         )
+        logging.info(f"steering: {steering}, target_speed: {target_speed}")
         
         # Clip steering to valid range
         steering = np.clip(steering, -0.4189, 0.4189)
+        logging.info(f"clipped steering: {steering}")
         
         return np.array([steering, target_speed]), None
         
@@ -93,6 +98,7 @@ class PurePursuitPolicy:
         #     target_speed = self._adaptive_speed(curvature)
         target_speed = self._adaptive_speed(curvature)
         
+        logging.info(f"lookahead_s: {lookahead_s}, lookahead_x: {lookahead_x}, lookahead_y: {lookahead_y}, curvature: {curvature}, target_speed: {target_speed}")
         return np.array([lookahead_x, lookahead_y, target_speed, curvature])
             
     def _adaptive_speed(self, curvature):
