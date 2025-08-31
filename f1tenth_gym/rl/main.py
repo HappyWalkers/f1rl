@@ -20,7 +20,7 @@ from .rl_env import F110GymWrapper
 from stable_baselines3.common.utils import set_random_seed
 from .stablebaseline3 import rl as sbrl
 from .stablebaseline3.rl import (ALGO_SAC, ALGO_PPO, ALGO_RECURRENT_PPO, ALGO_DDPG, ALGO_TD3, 
-                                ALGO_WALL_FOLLOW, ALGO_PURE_PURSUIT, ALGO_LATTICE)
+                                ALGO_WALL_FOLLOW, ALGO_PURE_PURSUIT, ALGO_LATTICE, ALGO_MPC)
 from .utils.Track import Track
 from .utils import utils
 from matplotlib import pyplot as plt
@@ -49,7 +49,7 @@ flags.DEFINE_integer("map_index", 63, "Index of the map to use")
 flags.DEFINE_string("logging_level", "INFO", "Logging level")
 flags.DEFINE_string("model_path", "", "Path to the model (.zip). Required for --eval. If empty during training, default save path is used.")
 flags.DEFINE_string("vecnorm_path", "", "Path to VecNormalize stats (.pkl). If empty during eval, will try to infer from model_path; during training, default save path is used unless provided.")
-flags.DEFINE_enum("algorithm", ALGO_RECURRENT_PPO, [ALGO_SAC, ALGO_PPO, ALGO_RECURRENT_PPO, ALGO_DDPG, ALGO_TD3, ALGO_WALL_FOLLOW, ALGO_PURE_PURSUIT, ALGO_LATTICE], "Algorithm used")
+flags.DEFINE_enum("algorithm", ALGO_RECURRENT_PPO, [ALGO_SAC, ALGO_PPO, ALGO_RECURRENT_PPO, ALGO_DDPG, ALGO_TD3, ALGO_WALL_FOLLOW, ALGO_PURE_PURSUIT, ALGO_LATTICE, ALGO_MPC], "Algorithm used")
 flags.DEFINE_enum("feature_extractor", "RESNET", ["MLP", "RESNET", "FILM", "TRANSFORMER", "MOE"], "Feature extractor architecture to use")
 flags.DEFINE_integer("total_timesteps", 10_000_000, "Total RL training timesteps")
 flags.DEFINE_integer("il_num_transitions", 1_000_000, "Number of expert transitions for imitation learning pretraining")

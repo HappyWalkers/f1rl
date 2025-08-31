@@ -25,6 +25,7 @@ from ..wall_follow import WallFollowPolicy
 from ..pure_pursuit import PurePursuitPolicy
 from ..lattice_planner import LatticePlannerPolicy
 from ..utils.Track import Track
+from ..mpc import MPCPolicy
 
 import torch
 
@@ -41,6 +42,7 @@ ALGO_A2C = "a2c"
 ALGO_WALL_FOLLOW = "wall_follow"
 ALGO_PURE_PURSUIT = "pure_pursuit"
 ALGO_LATTICE = "lattice"
+ALGO_MPC = "mpc"
 
 def is_rl_policy(algorithm: str) -> bool:
     if algorithm in [ALGO_PPO, ALGO_RECURRENT_PPO, ALGO_SAC, ALGO_TD3, ALGO_DDPG, ALGO_DQN, ALGO_A2C]:
@@ -395,6 +397,8 @@ def load_model_for_evaluation(algorithm: str, model_path: str = None, track: Tra
         return PurePursuitPolicy(track=track)
     elif algorithm == ALGO_LATTICE:
         return LatticePlannerPolicy(track=track, lidar_scan_in_obs_mode=FLAGS.lidar_scan_in_obs_mode)
+    elif algorithm == ALGO_MPC:
+        return MPCPolicy(track=track)
     elif algorithm == ALGO_PPO:
         return PPO.load(model_path)
     elif algorithm == ALGO_RECURRENT_PPO:
@@ -473,7 +477,7 @@ def run_evaluation_episode(eval_env: DummyVecEnv | SubprocVecEnv | VecNormalize,
         elif hasattr(action, '__len__') and len(action) == 1:
             # Some policies might only output steering, use observed (RAW) velocity
             desired_velocity = float(obs_raw[2]) if len(obs_raw) > 2 else 0.0
-        elif FLAGS.algorithm in [ALGO_WALL_FOLLOW, ALGO_PURE_PURSUIT, ALGO_LATTICE]:
+        elif FLAGS.algorithm in [ALGO_WALL_FOLLOW, ALGO_PURE_PURSUIT, ALGO_LATTICE, ALGO_MPC]:
             desired_velocity = float(action[1])
         else:
             # Fallback for other action formats
