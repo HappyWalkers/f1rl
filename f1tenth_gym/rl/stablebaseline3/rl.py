@@ -655,11 +655,6 @@ def initialize_expert_policies(vec_env, imitation_policy_type, racing_mode):
     """
     Initialize expert policies for each environment.
     """
-    # Import policies for imitation learning
-    from wall_follow import WallFollowPolicy
-    from pure_pursuit import PurePursuitPolicy
-    from lattice_planner import LatticePlannerPolicy
-
     # Initialize the expert policies for each environment
     logging.info(f"Initializing {imitation_policy_type} expert policies (racing_mode={racing_mode})")
     expert_policies = []
@@ -759,11 +754,11 @@ def collect_expert_rollouts(model, env, raw_vec_env, expert_policies, total_tran
                         
                         # Check if episode finished
                         if dones[i]:
-                            logging.debug(f"Episode {i} finished with reward {current_rollout_rewards[i]}")
+                            logging.info(f"Episode {i} finished with reward {current_rollout_rewards[i]}")
                             active_envs[i] = False
                             
                             # Only keep rollouts with positive rewards
-                            if current_rollout_rewards[i] > -1000:
+                            if current_rollout_rewards[i] > 1000:
                                 # Add to the sorted list
                                 env_rollouts[i].add((current_rollout_rewards[i], current_rollouts[i]))
                                 
