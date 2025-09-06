@@ -1243,7 +1243,7 @@ def setup_vecnormalize_env_eval(vec_env, model_path: Optional[str], vecnorm_path
         logging.warning("No VecNormalize statistics found for evaluation; proceeding without normalization")
     return vec_env
 
-def resolve_best_save_paths(seed: int) -> tuple[str, str]:
+def resolve_best_save_paths(seed: int) -> Tuple[str, str]:
     """
     Resolve the filesystem paths for saving the best model and VecNormalize stats.
 
