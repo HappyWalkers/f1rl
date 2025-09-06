@@ -4,6 +4,7 @@ from absl import logging
 from absl import flags
 from stable_baselines3.common.callbacks import EvalCallback
 from stable_baselines3.common.env_util import make_vec_env
+from stable_baselines3.common.vec_env.base_vec_env import VecEnv
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import VecNormalize, unwrap_vec_normalize
@@ -414,7 +415,7 @@ def load_model_for_evaluation(algorithm: str, model_path: str = None, track: Tra
 
  
 
-def run_evaluation_episode(eval_env: DummyVecEnv | SubprocVecEnv | VecNormalize, model, is_recurrent: bool, env_idx: int = 0) -> Tuple[float, int, float, List[tuple], List[float], List[float], List[float]]:
+def run_evaluation_episode(eval_env: VecEnv, model, is_recurrent: bool, env_idx: int = 0) -> Tuple[float, int, float, List[tuple], List[float], List[float], List[float]]:
     """Runs a single evaluation episode on a specific vectorized env index and returns metrics.
     """
     # Reset only the specified environment (returns raw obs from underlying env)
@@ -621,7 +622,7 @@ def initialize_with_imitation_learning(model, env, imitation_policy_type="PURE_P
     Initialize a reinforcement learning model using imitation learning from a specified policy.
     """
     # Check if env is a VecEnv and raise an error if it's not
-    if not isinstance(env, (DummyVecEnv, SubprocVecEnv, VecNormalize)):
+    if not isinstance(env, VecEnv):
         raise TypeError("env must be a VecEnv instance")
     
     # Check if environment is wrapped with VecNormalize
