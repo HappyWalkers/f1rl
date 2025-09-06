@@ -1141,7 +1141,7 @@ def expand_env_kwargs_for_envs(
 
     return per_env_kwargs
 
-def create_vec_env(env_kwargs, seed):
+def create_vec_env(env_kwargs, seed) -> VecEnv:
     # Read parameters from FLAGS
     num_envs = FLAGS.num_envs
     num_param_cmbs = FLAGS.num_param_cmbs
@@ -1186,7 +1186,7 @@ def create_vec_env(env_kwargs, seed):
     
     return vec_env
 
-def setup_vecnormalize_env_train(vec_env) -> VecNormalize | Any:
+def setup_vecnormalize_env_train(vec_env: VecEnv) -> VecEnv:
     """
     Wrap the environment with VecNormalize for training when using an RL algorithm.
 
@@ -1211,7 +1211,7 @@ def setup_vecnormalize_env_train(vec_env) -> VecNormalize | Any:
     logging.info("VecNormalize wrapper initialized for training")
     return vec_env
 
-def setup_vecnormalize_env_eval(vec_env, model_path: Optional[str], vecnorm_path: Optional[str]) -> VecNormalize | Any:
+def setup_vecnormalize_env_eval(vec_env, model_path: Optional[str], vecnorm_path: Optional[str]) -> VecEnv:
     """
     Load VecNormalize statistics for evaluation when using an RL algorithm.
 
@@ -1288,7 +1288,7 @@ def resolve_best_save_paths(seed: int) -> tuple[str, str]:
     return best_model_file, vecnorm_file_for_best
 
 # Updated train function to handle VecEnv and Domain Randomization
-def train(env, seed):
+def train(env: VecEnv, seed: int):
     """
     Trains the RL model.
 
