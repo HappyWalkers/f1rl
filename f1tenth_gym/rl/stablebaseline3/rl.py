@@ -759,8 +759,8 @@ def collect_expert_rollouts(model, env, raw_vec_env, expert_policies, total_tran
                             logging.info(f"Episode {i} finished with reward {current_rollout_rewards[i]}")
                             active_envs[i] = False
                             
-                            # Only keep rollouts with positive rewards
-                            if current_rollout_rewards[i] > 1000:
+                            # Only keep rollouts above the reward threshold
+                            if current_rollout_rewards[i] > FLAGS.il_reward_threshold:
                                 # Add to the sorted list
                                 env_rollouts[i].add((current_rollout_rewards[i], current_rollouts[i]))
                                 

@@ -53,6 +53,7 @@ flags.DEFINE_enum("algorithm", ALGO_RECURRENT_PPO, [ALGO_SAC, ALGO_PPO, ALGO_REC
 flags.DEFINE_enum("feature_extractor", "RESNET", ["MLP", "RESNET", "FILM", "TRANSFORMER", "MOE"], "Feature extractor architecture to use")
 flags.DEFINE_integer("total_timesteps", 10_000_000, "Total RL training timesteps")
 flags.DEFINE_integer("il_num_transitions", 1_000_000, "Number of expert transitions for imitation learning pretraining")
+flags.DEFINE_float("il_reward_threshold", 1000.0, "Minimum episode reward to keep an expert rollout during IL data collection")
 
 # WandB flags
 flags.DEFINE_boolean("use_wandb", True, "Whether to use Weights & Biases for experiment tracking")

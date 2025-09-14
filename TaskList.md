@@ -33,6 +33,9 @@
 
 * bidirectional RNN -> give it a try
 
+* rewards design
+  * Encourage smoothness (quadratic penalty on Δsteer, Δthrottle) inside the chunk to avoid twitchy plans.
+
 * Get a good policy (pure pursuit, MPC, MPPI) on the real car & use that policy as the expert policy. Maybe RL fine tuning is a bad idea because it trains a policy only working well in sim and increase the sim-to-real gap. The quality of the policy purely depends on the quality of the simulation.
 
 * use MPC to replace the dynamic part and use the rl policy as the planner
