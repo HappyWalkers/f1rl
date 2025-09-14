@@ -4,6 +4,7 @@ from absl import logging
 from absl import flags
 from stable_baselines3.common.callbacks import EvalCallback
 from stable_baselines3.common.env_util import make_vec_env
+from stable_baselines3.common.vec_env.base_vec_env import VecEnv
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import VecNormalize, unwrap_vec_normalize
@@ -25,6 +26,7 @@ from ..wall_follow import WallFollowPolicy
 from ..pure_pursuit import PurePursuitPolicy
 from ..lattice_planner import LatticePlannerPolicy
 from ..utils.Track import Track
+from ..mpc import MPCPolicy
 
 import torch
 
@@ -41,6 +43,7 @@ ALGO_A2C = "a2c"
 ALGO_WALL_FOLLOW = "wall_follow"
 ALGO_PURE_PURSUIT = "pure_pursuit"
 ALGO_LATTICE = "lattice"
+ALGO_MPC = "mpc"
 
 def is_rl_policy(algorithm: str) -> bool:
     if algorithm in [ALGO_PPO, ALGO_RECURRENT_PPO, ALGO_SAC, ALGO_TD3, ALGO_DDPG, ALGO_DQN, ALGO_A2C]:
@@ -385,12 +388,18 @@ def create_sac(env, seed):
 
 def load_model_for_evaluation(algorithm: str, model_path: str = None, track: Track = None):
     """Loads or returns the model for evaluation based on algorithm type."""
+    # For RL algorithms, require a non-empty model_path
+    if is_rl_policy(algorithm):
+        if model_path is None or str(model_path).strip() == "":
+            raise ValueError("model_path is required for RL evaluation. Provide --model_path to a .zip file.")
     if algorithm == ALGO_WALL_FOLLOW:
         return WallFollowPolicy()
     elif algorithm == ALGO_PURE_PURSUIT:
         return PurePursuitPolicy(track=track)
     elif algorithm == ALGO_LATTICE:
         return LatticePlannerPolicy(track=track, lidar_scan_in_obs_mode=FLAGS.lidar_scan_in_obs_mode)
+    elif algorithm == ALGO_MPC:
+        return MPCPolicy(track=track)
     elif algorithm == ALGO_PPO:
         return PPO.load(model_path)
     elif algorithm == ALGO_RECURRENT_PPO:
@@ -406,7 +415,7 @@ def load_model_for_evaluation(algorithm: str, model_path: str = None, track: Tra
 
  
 
-def run_evaluation_episode(eval_env: DummyVecEnv | SubprocVecEnv | VecNormalize, model, is_recurrent: bool, env_idx: int = 0) -> Tuple[float, int, float, List[tuple], List[float], List[float], List[float]]:
+def run_evaluation_episode(eval_env: VecEnv, model, is_recurrent: bool, env_idx: int = 0) -> Tuple[float, int, float, List[tuple], List[float], List[float], List[float]]:
     """Runs a single evaluation episode on a specific vectorized env index and returns metrics.
     """
     # Reset only the specified environment (returns raw obs from underlying env)
@@ -469,7 +478,7 @@ def run_evaluation_episode(eval_env: DummyVecEnv | SubprocVecEnv | VecNormalize,
         elif hasattr(action, '__len__') and len(action) == 1:
             # Some policies might only output steering, use observed (RAW) velocity
             desired_velocity = float(obs_raw[2]) if len(obs_raw) > 2 else 0.0
-        elif FLAGS.algorithm in [ALGO_WALL_FOLLOW, ALGO_PURE_PURSUIT, ALGO_LATTICE]:
+        elif FLAGS.algorithm in [ALGO_WALL_FOLLOW, ALGO_PURE_PURSUIT, ALGO_LATTICE, ALGO_MPC]:
             desired_velocity = float(action[1])
         else:
             # Fallback for other action formats
@@ -550,6 +559,7 @@ def evaluate(eval_env):
     model_path = FLAGS.model_path
     num_envs = FLAGS.num_envs
 
+    track = None
     if not is_rl_policy(algorithm):
         track = eval_env.get_attr("track", indices=0)[0]
         model = load_model_for_evaluation(algorithm, track=track)
@@ -600,10 +610,10 @@ def evaluate(eval_env):
     # Plot velocity profiles if we have collected data
     any_data = any(len(pos) > 0 for pos in env_positions)
     if any_data and FLAGS.plot_in_eval:
-        plot_velocity_profiles(env_positions, env_velocities, env_params, num_envs, track, model_path, algorithm)
-        plot_acceleration_profiles(env_positions, env_velocities, env_params, num_envs, track, model_path, algorithm)
-        plot_velocity_time_profiles(env_velocities, env_desired_velocities, env_episode_lengths, env_params, num_envs, num_episodes, model_path, algorithm)
-        plot_steering_time_profiles(env_steering_angles, env_episode_lengths, env_params, num_envs, num_episodes, model_path, algorithm)
+        plot_velocity_profiles(env_positions, env_velocities, env_params, num_envs, track, algorithm)
+        plot_acceleration_profiles(env_positions, env_velocities, env_params, num_envs, track, algorithm)
+        plot_velocity_time_profiles(env_velocities, env_desired_velocities, env_episode_lengths, env_params, num_envs, num_episodes, algorithm)
+        plot_steering_time_profiles(env_steering_angles, env_episode_lengths, env_params, num_envs, num_episodes, algorithm)
     
     # Compute statistics from evaluation results
     return compute_statistics(env_episode_rewards, env_episode_lengths, env_lap_times, env_velocities, num_envs)
@@ -613,7 +623,7 @@ def initialize_with_imitation_learning(model, env, imitation_policy_type="PURE_P
     Initialize a reinforcement learning model using imitation learning from a specified policy.
     """
     # Check if env is a VecEnv and raise an error if it's not
-    if not isinstance(env, (DummyVecEnv, SubprocVecEnv, VecNormalize)):
+    if not isinstance(env, VecEnv):
         raise TypeError("env must be a VecEnv instance")
     
     # Check if environment is wrapped with VecNormalize
@@ -647,11 +657,6 @@ def initialize_expert_policies(vec_env, imitation_policy_type, racing_mode):
     """
     Initialize expert policies for each environment.
     """
-    # Import policies for imitation learning
-    from wall_follow import WallFollowPolicy
-    from pure_pursuit import PurePursuitPolicy
-    from lattice_planner import LatticePlannerPolicy
-
     # Initialize the expert policies for each environment
     logging.info(f"Initializing {imitation_policy_type} expert policies (racing_mode={racing_mode})")
     expert_policies = []
@@ -751,11 +756,11 @@ def collect_expert_rollouts(model, env, raw_vec_env, expert_policies, total_tran
                         
                         # Check if episode finished
                         if dones[i]:
-                            logging.debug(f"Episode {i} finished with reward {current_rollout_rewards[i]}")
+                            logging.info(f"Episode {i} finished with reward {current_rollout_rewards[i]}")
                             active_envs[i] = False
                             
-                            # Only keep rollouts with positive rewards
-                            if current_rollout_rewards[i] > -1000:
+                            # Only keep rollouts above the reward threshold
+                            if current_rollout_rewards[i] > FLAGS.il_reward_threshold:
                                 # Add to the sorted list
                                 env_rollouts[i].add((current_rollout_rewards[i], current_rollouts[i]))
                                 
@@ -1137,7 +1142,7 @@ def expand_env_kwargs_for_envs(
 
     return per_env_kwargs
 
-def create_vec_env(env_kwargs, seed):
+def create_vec_env(env_kwargs, seed) -> VecEnv:
     # Read parameters from FLAGS
     num_envs = FLAGS.num_envs
     num_param_cmbs = FLAGS.num_param_cmbs
@@ -1182,7 +1187,7 @@ def create_vec_env(env_kwargs, seed):
     
     return vec_env
 
-def setup_vecnormalize_env_train(vec_env) -> VecNormalize | Any:
+def setup_vecnormalize_env_train(vec_env: VecEnv) -> VecEnv:
     """
     Wrap the environment with VecNormalize for training when using an RL algorithm.
 
@@ -1207,7 +1212,7 @@ def setup_vecnormalize_env_train(vec_env) -> VecNormalize | Any:
     logging.info("VecNormalize wrapper initialized for training")
     return vec_env
 
-def setup_vecnormalize_env_eval(vec_env, model_path: Optional[str], vecnorm_path: Optional[str]) -> VecNormalize | Any:
+def setup_vecnormalize_env_eval(vec_env, model_path: Optional[str], vecnorm_path: Optional[str]) -> VecEnv:
     """
     Load VecNormalize statistics for evaluation when using an RL algorithm.
 
@@ -1218,9 +1223,13 @@ def setup_vecnormalize_env_eval(vec_env, model_path: Optional[str], vecnorm_path
     if not is_rl_policy(algorithm):
         return vec_env
 
+    # Normalize empty strings to None
+    model_path = model_path if (model_path is not None and str(model_path).strip() != "") else None
+    vecnorm_path = vecnorm_path if (vecnorm_path is not None and str(vecnorm_path).strip() != "") else None
+
     # Resolve stats path
     resolved_path = vecnorm_path
-    if (resolved_path is None or not os.path.exists(resolved_path)) and model_path is not None:
+    if (resolved_path is None or not os.path.exists(resolved_path)) and model_path:
         model_dir = os.path.dirname(model_path)
         potential_vecnorm_path = os.path.join(model_dir, "vec_normalize.pkl")
         if os.path.exists(potential_vecnorm_path):
@@ -1235,8 +1244,52 @@ def setup_vecnormalize_env_eval(vec_env, model_path: Optional[str], vecnorm_path
         logging.warning("No VecNormalize statistics found for evaluation; proceeding without normalization")
     return vec_env
 
+def resolve_best_save_paths(seed: int) -> Tuple[str, str]:
+    """
+    Resolve the filesystem paths for saving the best model and VecNormalize stats.
+
+    If --model_path is provided (non-empty), save the best model there and place
+    VecNormalize stats at --vecnorm_path if provided; otherwise next to the model file.
+
+    If --model_path is empty, fall back to the default directory structure under
+    ./logs/<model_dir_name>/best_model/.
+    """
+    user_model_path = FLAGS.model_path if hasattr(FLAGS, 'model_path') else ""
+    user_vecnorm_path = FLAGS.vecnorm_path if hasattr(FLAGS, 'vecnorm_path') else ""
+
+    if isinstance(user_model_path, str) and user_model_path.strip() != "":
+        best_model_file = user_model_path
+        if isinstance(user_vecnorm_path, str) and user_vecnorm_path.strip() != "":
+            vecnorm_file_for_best = user_vecnorm_path
+        else:
+            vecnorm_file_for_best = os.path.join(os.path.dirname(best_model_file), "vec_normalize.pkl")
+    else:
+        # Read parameters from FLAGS
+        algorithm = FLAGS.algorithm
+        feature_extractor_name = FLAGS.feature_extractor
+        num_envs = FLAGS.num_envs
+        num_param_cmbs = FLAGS.num_param_cmbs
+        use_domain_randomization = FLAGS.use_dr
+        use_imitation_learning = FLAGS.use_il
+        include_params_in_obs = FLAGS.include_params_in_obs
+        racing_mode = FLAGS.racing_mode
+        imitation_policy_type = FLAGS.il_policy
+        
+        # Create formatted path based on training parameters and timestamp
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        model_dir_name = f"{algorithm}_{feature_extractor_name}_envs{num_envs}_params{num_param_cmbs if num_param_cmbs is not None else num_envs}_dr{int(use_domain_randomization)}_il{int(use_imitation_learning)}_crl{int(include_params_in_obs)}_racing{int(racing_mode)}"
+        if use_imitation_learning:
+            model_dir_name += f"_{imitation_policy_type}"
+        model_dir_name += f"_seed{seed}_{timestamp}"
+        
+        best_model_path = os.path.join("./logs", model_dir_name, "best_model")
+        best_model_file = os.path.join(best_model_path, "best_model")
+        vecnorm_file_for_best = os.path.join(best_model_path, "vec_normalize.pkl")
+
+    return best_model_file, vecnorm_file_for_best
+
 # Updated train function to handle VecEnv and Domain Randomization
-def train(env, seed):
+def train(env: VecEnv, seed: int):
     """
     Trains the RL model.
 
@@ -1254,6 +1307,8 @@ def train(env, seed):
     use_imitation_learning = FLAGS.use_il
     imitation_policy_type = FLAGS.il_policy
     algorithm = FLAGS.algorithm
+    total_timesteps = FLAGS.total_timesteps
+    il_num_transitions = FLAGS.il_num_transitions
     include_params_in_obs = FLAGS.include_params_in_obs
     racing_mode = FLAGS.racing_mode
     feature_extractor_name = FLAGS.feature_extractor
@@ -1277,39 +1332,45 @@ def train(env, seed):
     # --- Imitation Learning (Optional, might need adaptation for VecEnv) ---
     if use_imitation_learning:
         logging.info("Using imitation learning to bootstrap the model.")
-        model = initialize_with_imitation_learning(model, env, imitation_policy_type=imitation_policy_type, racing_mode=racing_mode, algorithm=algorithm)
+        model = initialize_with_imitation_learning(
+            model,
+            env,
+            imitation_policy_type=imitation_policy_type,
+            total_transitions=il_num_transitions,
+            racing_mode=racing_mode,
+            algorithm=algorithm,
+        )
     else:
         logging.info("Skipping imitation learning.")
 
     logging.info(f"Starting RL training with {env.num_envs} environments.")
 
     # --- RL Training ---
-    # Create formatted path based on training parameters and timestamp
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    model_dir_name = f"{algorithm}_{feature_extractor_name}_envs{num_envs}_params{num_param_cmbs if num_param_cmbs is not None else num_envs}_dr{int(use_domain_randomization)}_il{int(use_imitation_learning)}_crl{int(include_params_in_obs)}_racing{int(racing_mode)}"
-    if use_imitation_learning:
-        model_dir_name += f"_{imitation_policy_type}"
-    model_dir_name += f"_seed{seed}_{timestamp}"
-    
-    # Create the full paths
-    best_model_path = os.path.join("./logs", model_dir_name, "best_model")
-    os.makedirs(best_model_path, exist_ok=True)
+    # Determine save locations using helper
+    best_model_file, vecnorm_file_for_best = resolve_best_save_paths(seed)
+    # Ensure directories exist
+    os.makedirs(os.path.dirname(best_model_file), exist_ok=True)
+    os.makedirs(os.path.dirname(vecnorm_file_for_best), exist_ok=True)
 
     # Import callbacks for saving best model based on training rewards
     from stable_baselines3.common.callbacks import CheckpointCallback, BaseCallback
 
     # Custom callback to save model with highest training reward
     class SaveOnBestTrainingRewardCallback(BaseCallback):
-        def __init__(self, check_freq, save_path, verbose=1):
+        def __init__(self, check_freq, model_file_path: str, vecnorm_file_path: str, verbose=1):
             super(SaveOnBestTrainingRewardCallback, self).__init__(verbose)
             self.check_freq = check_freq
-            self.model_save_path = save_path
+            # Full file paths (without .zip for SB3 model)
+            self.model_file_path = model_file_path
+            self.vecnorm_file_path = vecnorm_file_path
             self.best_mean_reward = -float('inf')
         
         def _init_callback(self):
-            # Create folder if needed
-            if self.model_save_path is not None:
-                os.makedirs(self.model_save_path, exist_ok=True)
+            # Ensure parent directories exist
+            if self.model_file_path is not None:
+                os.makedirs(os.path.dirname(self.model_file_path), exist_ok=True)
+            if self.vecnorm_file_path is not None:
+                os.makedirs(os.path.dirname(self.vecnorm_file_path), exist_ok=True)
         
         def _on_step(self):
             if self.n_calls % self.check_freq == 0:
@@ -1326,16 +1387,16 @@ def train(env, seed):
                         self.best_mean_reward = mean_reward
                         if self.verbose > 0:
                             print(f"Saving new best model with mean reward: {mean_reward:.2f}")
-                        self.model.save(os.path.join(self.model_save_path, "best_model"))
+                        self.model.save(self.model_file_path)
                         
                         # Save normalization statistics if the environment is wrapped with VecNormalize
                         if isinstance(self.training_env, VecNormalize) or hasattr(self.training_env, 'venv') and isinstance(self.training_env.venv, VecNormalize):
                             # Get the VecNormalize wrapper
                             vec_normalize = self.training_env if isinstance(self.training_env, VecNormalize) else self.training_env.venv
                             # Save the normalization statistics
-                            vec_normalize.save(os.path.join(self.model_save_path, "vec_normalize.pkl"))
+                            vec_normalize.save(self.vecnorm_file_path)
                             if self.verbose > 0:
-                                print(f"Saved VecNormalize statistics to {os.path.join(self.model_save_path, 'vec_normalize.pkl')}")
+                                print(f"Saved VecNormalize statistics to {self.vecnorm_file_path}")
             
             return True
 
@@ -1346,28 +1407,18 @@ def train(env, seed):
     # Check frequency should be frequent enough to capture improvements but not too frequent
     save_callback = SaveOnBestTrainingRewardCallback(
         check_freq=max(1000 // num_envs, 1),
-        save_path=best_model_path,
+        model_file_path=best_model_file,
+        vecnorm_file_path=vecnorm_file_for_best,
         verbose=1
     )
 
     model.learn(
-        total_timesteps=10_000_000,
+        total_timesteps=total_timesteps,
         log_interval=10, # Log less frequently for VecEnv
         reset_num_timesteps=True, # Start timesteps from 0
         callback=save_callback
     )
-    
-    # Save final model and VecNormalize statistics
-    final_model_path = os.path.join("./logs", model_dir_name, "final_model")
-    os.makedirs(final_model_path, exist_ok=True)
-    model.save(os.path.join(final_model_path, "final_model"))
-    
-    # Save VecNormalize statistics if the environment is wrapped
-    if isinstance(env, VecNormalize):
-        env.save(os.path.join(final_model_path, "vec_normalize.pkl"))
-        logging.info(f"Saved final VecNormalize statistics to {os.path.join(final_model_path, 'vec_normalize.pkl')}")
-    
-    logging.info(f"Training completed. Final model saved to {os.path.join(final_model_path, 'final_model.zip')}")
-    logging.info(f"Best model saved to {os.path.join(best_model_path, 'best_model.zip')}")
+
+    logging.info(f"Best model saved to {best_model_file if best_model_file else 'N/A'}")
     
     return model

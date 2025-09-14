@@ -4,7 +4,7 @@ from matplotlib import cm
 import numpy as np
 import datetime
 import os
-import logging
+from absl import logging
 
 def compute_statistics(env_episode_rewards, env_episode_lengths, env_lap_times, env_velocities, num_envs):
     """Computes statistics from evaluation results including velocity and acceleration."""
@@ -178,16 +178,16 @@ def compute_statistics(env_episode_rewards, env_episode_lengths, env_lap_times, 
         "env_stats": env_stats
     }
 
-def plot_velocity_profiles(env_positions, env_velocities, env_params, num_envs, track=None, model_path=None, algorithm="SAC"):
+def plot_velocity_profiles(env_positions, env_velocities, env_params, num_envs, track=None, algorithm="SAC"):
     """Creates and saves velocity profile plots."""
     # Create output directory
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     plot_dir = f"./velocity_profiles_{timestamp}"
     
-    if model_path is not None:
-        output_dir = os.path.dirname(model_path) or "."
-        os.makedirs(output_dir, exist_ok=True)
-        plot_dir = os.path.join(output_dir, f"velocity_profiles_{timestamp}")
+    # Always write under ./logs/plot relative to run directory
+    output_dir = os.path.join("./logs", "plot")
+    os.makedirs(output_dir, exist_ok=True)
+    plot_dir = os.path.join(output_dir, f"velocity_profiles_{timestamp}")
     
     os.makedirs(plot_dir, exist_ok=True)
     
@@ -290,16 +290,16 @@ def plot_velocity_profiles(env_positions, env_velocities, env_params, num_envs, 
     
     plt.close('all')
 
-def plot_acceleration_profiles(env_positions, env_velocities, env_params, num_envs, track=None, model_path=None, algorithm="SAC"):
+def plot_acceleration_profiles(env_positions, env_velocities, env_params, num_envs, track=None, algorithm="SAC"):
     """Creates and saves 2D acceleration profile plots with color-coded acceleration values."""
     # Create output directory
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     plot_dir = f"./acceleration_profiles_{timestamp}"
     
-    if model_path is not None:
-        output_dir = os.path.dirname(model_path) or "."
-        os.makedirs(output_dir, exist_ok=True)
-        plot_dir = os.path.join(output_dir, f"acceleration_profiles_{timestamp}")
+    # Always write under ./logs/plot relative to run directory
+    output_dir = os.path.join("./logs", "plot")
+    os.makedirs(output_dir, exist_ok=True)
+    plot_dir = os.path.join(output_dir, f"acceleration_profiles_{timestamp}")
     
     os.makedirs(plot_dir, exist_ok=True)
     
@@ -435,16 +435,16 @@ def plot_acceleration_profiles(env_positions, env_velocities, env_params, num_en
     plt.close('all')
     logging.info(f"2D acceleration profile plots saved to {plot_dir}")
 
-def plot_velocity_time_profiles(env_velocities, env_desired_velocities, env_episode_lengths, env_params, num_envs, num_episodes, model_path=None, algorithm="SAC"):
+def plot_velocity_time_profiles(env_velocities, env_desired_velocities, env_episode_lengths, env_params, num_envs, num_episodes, algorithm="SAC"):
     """Creates and saves velocity vs time profile plots with both observed and desired velocities, plus acceleration on right axis."""
     # Create output directory
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     plot_dir = f"./velocity_time_profiles_{timestamp}"
     
-    if model_path is not None:
-        output_dir = os.path.dirname(model_path) or "."
-        os.makedirs(output_dir, exist_ok=True)
-        plot_dir = os.path.join(output_dir, f"velocity_time_profiles_{timestamp}")
+    # Always write under ./logs/plot relative to run directory
+    output_dir = os.path.join("./logs", "plot")
+    os.makedirs(output_dir, exist_ok=True)
+    plot_dir = os.path.join(output_dir, f"velocity_time_profiles_{timestamp}")
     
     os.makedirs(plot_dir, exist_ok=True)
     
@@ -610,16 +610,16 @@ def plot_velocity_time_profiles(env_velocities, env_desired_velocities, env_epis
     plt.close('all')
     logging.info(f"Velocity and acceleration vs time profile plots saved to {plot_dir}")
 
-def plot_steering_time_profiles(env_steering_angles, env_episode_lengths, env_params, num_envs, num_episodes, model_path=None, algorithm="SAC"):
+def plot_steering_time_profiles(env_steering_angles, env_episode_lengths, env_params, num_envs, num_episodes, algorithm="SAC"):
     """Creates and saves steering angle and steering angle velocity vs time profile plots."""
     # Create output directory
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     plot_dir = f"./steering_time_profiles_{timestamp}"
     
-    if model_path is not None:
-        output_dir = os.path.dirname(model_path) or "."
-        os.makedirs(output_dir, exist_ok=True)
-        plot_dir = os.path.join(output_dir, f"steering_time_profiles_{timestamp}")
+    # Always write under ./logs/plot relative to run directory
+    output_dir = os.path.join("./logs", "plot")
+    os.makedirs(output_dir, exist_ok=True)
+    plot_dir = os.path.join(output_dir, f"steering_time_profiles_{timestamp}")
     
     os.makedirs(plot_dir, exist_ok=True)
     

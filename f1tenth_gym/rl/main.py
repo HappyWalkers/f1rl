@@ -20,7 +20,7 @@ from .rl_env import F110GymWrapper
 from stable_baselines3.common.utils import set_random_seed
 from .stablebaseline3 import rl as sbrl
 from .stablebaseline3.rl import (ALGO_SAC, ALGO_PPO, ALGO_RECURRENT_PPO, ALGO_DDPG, ALGO_TD3, 
-                                ALGO_WALL_FOLLOW, ALGO_PURE_PURSUIT, ALGO_LATTICE)
+                                ALGO_WALL_FOLLOW, ALGO_PURE_PURSUIT, ALGO_LATTICE, ALGO_MPC)
 from .utils.Track import Track
 from .utils import utils
 from matplotlib import pyplot as plt
@@ -28,27 +28,32 @@ from PIL import Image
 
 FLAGS = flags.FLAGS
 
+DEFAULT_NUM_ENVS = max(1, os.cpu_count() or 1)
+
 flags.DEFINE_boolean("racing_mode", False, "Enable racing mode with two cars")
 flags.DEFINE_integer("num_agents", 1, "Number of agents")
 flags.DEFINE_boolean("use_il", True, "Whether to use imitation learning before RL training")
-flags.DEFINE_enum("il_policy", "PURE_PURSUIT", ["WALL_FOLLOW", "PURE_PURSUIT", "LATTICE"], "Policy to use for imitation learning.")
-flags.DEFINE_integer("num_envs", 24, "Number of parallel environments for training")
+flags.DEFINE_enum("il_policy", "WALL_FOLLOW", ["WALL_FOLLOW", "PURE_PURSUIT", "LATTICE"], "Policy to use for imitation learning.")
+flags.DEFINE_integer("num_envs", DEFAULT_NUM_ENVS, "Number of parallel environments for training (defaults to CPU cores)")
 flags.DEFINE_boolean("use_dr", True, "Apply domain randomization during training")
-flags.DEFINE_integer("num_param_cmbs", 24, "Number of parameter combinations to use for domain randomization")
+flags.DEFINE_integer("num_param_cmbs", DEFAULT_NUM_ENVS, "Number of parameter combinations to use for domain randomization")
 flags.DEFINE_boolean("include_params_in_obs", False, "Include environment parameters in observations for contextual RL")
 flags.DEFINE_enum("lidar_scan_in_obs_mode", "DOWNSAMPLED", ["NONE", "FULL", "DOWNSAMPLED"], "Lidar scan mode in observations: NONE (no lidar), FULL (1080 points), DOWNSAMPLED (108 points - 1 in 10)")
 
 flags.DEFINE_boolean("eval", False, "Run only evaluation (no training)")
 flags.DEFINE_integer("num_eval_episodes", 1, "Number of episodes to evaluate")
-flags.DEFINE_boolean("render_in_eval", True, "Render in evaluation")
+flags.DEFINE_boolean("render_in_eval", False, "Render in evaluation")
 flags.DEFINE_boolean("plot_in_eval", True, "Plot in evaluation")
 flags.DEFINE_integer("seed", 42, "Random seed for reproducibility")
 flags.DEFINE_integer("map_index", 63, "Index of the map to use")
 flags.DEFINE_string("logging_level", "INFO", "Logging level")
-flags.DEFINE_string("model_path", "./logs/best_model/best_model.zip", "Path to the model to evaluate")
-flags.DEFINE_string("vecnorm_path", "./logs/best_model/vec_normalize.pkl", "Path to the VecNormalize statistics file. If None, will try to infer from model_path.")
-flags.DEFINE_enum("algorithm", ALGO_RECURRENT_PPO, [ALGO_SAC, ALGO_PPO, ALGO_RECURRENT_PPO, ALGO_DDPG, ALGO_TD3, ALGO_WALL_FOLLOW, ALGO_PURE_PURSUIT, ALGO_LATTICE], "Algorithm used")
+flags.DEFINE_string("model_path", "", "Path to the model (.zip). Required for --eval. If empty during training, default save path is used.")
+flags.DEFINE_string("vecnorm_path", "", "Path to VecNormalize stats (.pkl). If empty during eval, will try to infer from model_path; during training, default save path is used unless provided.")
+flags.DEFINE_enum("algorithm", ALGO_RECURRENT_PPO, [ALGO_SAC, ALGO_PPO, ALGO_RECURRENT_PPO, ALGO_DDPG, ALGO_TD3, ALGO_WALL_FOLLOW, ALGO_PURE_PURSUIT, ALGO_LATTICE, ALGO_MPC], "Algorithm used")
 flags.DEFINE_enum("feature_extractor", "RESNET", ["MLP", "RESNET", "FILM", "TRANSFORMER", "MOE"], "Feature extractor architecture to use")
+flags.DEFINE_integer("total_timesteps", 10_000_000, "Total RL training timesteps")
+flags.DEFINE_integer("il_num_transitions", 1_000_000, "Number of expert transitions for imitation learning pretraining")
+flags.DEFINE_float("il_reward_threshold", 1000.0, "Minimum episode reward to keep an expert rollout during IL data collection")
 
 # WandB flags
 flags.DEFINE_boolean("use_wandb", True, "Whether to use Weights & Biases for experiment tracking")
