@@ -559,6 +559,7 @@ def evaluate(eval_env):
     model_path = FLAGS.model_path
     num_envs = FLAGS.num_envs
 
+    track = None
     if not is_rl_policy(algorithm):
         track = eval_env.get_attr("track", indices=0)[0]
         model = load_model_for_evaluation(algorithm, track=track)
